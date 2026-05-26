@@ -151,16 +151,19 @@ This is the sole compile step. Do not invoke `arduino-cli`, `make`, `cmake`, or 
 
 > ⚠️ The ESP32 is not permanently connected. Always verify the device before flashing.
 
-1. **Check device presence — mandatory first step:**
+1. **Pre-flash Version Control Requirement — mandatory prior to any flash:**
+   Before triggering any upload or flashing command, ensure that a Git commit and a Git push (`git push`) have been successfully executed. The commit message **must** explicitly reference and include the new firmware version currently declared in `include/version.h`.
+
+2. **Check device presence — mandatory second step:**
    ```bash
    wsl -d Ubuntu-22.04 bash -l -c "ls /dev/ttyACM0"
    ```
 
-2. **If `/dev/ttyACM0` is NOT present:**
+3. **If `/dev/ttyACM0` is NOT present:**
    - Report to the user: "ESP32 not detected on /dev/ttyACM0. Please connect the device and ensure usbipd has forwarded the USB port to WSL2."
    - **STOP. Do not attempt to flash.**
 
-3. **If `/dev/ttyACM0` IS present:**
+4. **If `/dev/ttyACM0` IS present:**
    - Ask the user explicitly: "ESP32 detected on /dev/ttyACM0. Flash the new firmware now?"
    - Wait for explicit confirmation ("yes", "flash it", or equivalent).
    - Only then run:
@@ -168,7 +171,7 @@ This is the sole compile step. Do not invoke `arduino-cli`, `make`, `cmake`, or 
      wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "pio run --target upload --upload-port /dev/ttyACM0"
      ```
 
-4. **Never flash autonomously.** Flashing always requires a device check + user confirmation, regardless of context.
+5. **Never flash autonomously.** Flashing always requires a Git commit/push verification, device check, and explicit user confirmation, regardless of context.
 
 ### Artifacts & Build Output
 
