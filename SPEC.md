@@ -45,6 +45,12 @@ The proxy must implement a strict State Machine to handle network connectivity. 
 - On abrupt loss of Wican Wi-Fi: transition immediately to SCANNING without crashing.
 - On abrupt loss of Home Wi-Fi: transition immediately to SCANNING; buffered data is retained.
 
+### Device Resilience & Connection Safeguards
+
+- **Hardware Watchdog (WDT):** A hardware watchdog is configured with a safety timeout margin of 30 seconds (`WDT_TIMEOUT_S 30`) to absorb network negotiation and diagnostic query delays without triggering unwanted resets.
+- **Asynchronous WiFi Connect:** To ensure the background WebServer remains responsive, WiFi connections are established using a non-blocking asynchronous state machine (`WIFI_IDLE`, `WIFI_CONNECTING`, `WIFI_CONNECTED`) with strict connection timeouts (10s for WiCAN, 15s for Home).
+- **Boot-Loop Protection:** An NVS crash counter is tracked in preference namespace `proxy` (key `bootcrash`). If the device fails to boot stably 5 consecutive times, a boot loop warning is logged. The counter is automatically zeroed once NTP time sync is confirmed on the Home network.
+
 ---
 
 ## [SPEC-02] Diagnostics, WebServer & Log Management
@@ -134,6 +140,14 @@ Transition reasons to be logged:
   - Streams the full contents of `debug.log` as `text/plain`.
   - No authentication required (local network only).
 
+### Over-the-Air (OTA) Updates
+
+- Active **only** when `CONNECTED_TO_HOME`.
+- **Protocol:** ArduinoOTA on standard port `3232`.
+- **Hostname:** `eup-proxy`
+- **Security:** Access is protected by the upload password `eup-proxy-ota`.
+- **Storage Layout:** Supports seamless switching between two 1.5MB application slots using the `partitions_ota.csv` partition layout.
+
 ---
 
 ## [SPEC-03] Data Buffering Contract
@@ -167,6 +181,8 @@ The buffered payload mirrors the `eup/data` MQTT schema (see [SPEC-05]):
   "src": "CAR_BUFFERED"
 }
 ```
+
+> **Memory Optimization Note:** In memory, `TelemetryData.src` is represented as a fixed-size `char[16]` character array to prevent heap fragmentation during recurring queue insertions.
 
 ---
 
@@ -211,6 +227,12 @@ Group B is also read **once immediately** after Wican connection is established 
 - CAN protocol: 11-bit, 500 kbps (`AT SP 6`) — required for VW e-up!
 - Header switching: `AT SH 7E5` / `AT SH 7E0` — cached in `_currentHeader`, only sent when header changes
 - UDS response prefix stripped by `extractPayload()` before raw value parsing
+
+### OBD Timing & Diagnostics
+
+- **Command Timeout:** Commands use an increased timeout of 2.0 seconds (`OBD_CMD_TIMEOUT_MS`) to handle slow ECU responses reliably.
+- **Tester Present Keep-Alive:** A `3E 80` keep-alive command is sent every 2.5 seconds (`TESTER_PRESENT_INTERVAL_MS`) to maintain the active UDS diagnostic session.
+- **Diagnostic Logging:** Logs explicitly differentiate silent connection/response timeouts from explicit Negative Response Codes (NRCs starting with `7F`) returned by the ECU.
 
 ### Log Format for OBD2 Data
 
