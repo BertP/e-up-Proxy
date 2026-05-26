@@ -5,6 +5,8 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
+#include <ArduinoOTA.h>
+#include <Preferences.h>
 #include <time.h>
 
 #include "config.h"
@@ -19,6 +21,13 @@ enum ProxyState {
     STATE_CONNECTED_TO_HOME
 };
 
+// WiFi connection sub-states (non-blocking)
+enum WiFiConnectPhase {
+    WIFI_IDLE,
+    WIFI_CONNECTING,
+    WIFI_CONNECTED
+};
+
 static ProxyState currentState = STATE_SCANNING;
 static const char* stateNames[] = { "SCANNING", "CONNECTED_TO_WICAN", "CONNECTED_TO_HOME" };
 
@@ -26,6 +35,7 @@ static const char* stateNames[] = { "SCANNING", "CONNECTED_TO_WICAN", "CONNECTED
 WebServer server(80);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+Preferences prefs;
 
 // Cache for telemetry data
 static TelemetryData latestCachedData;
@@ -42,6 +52,14 @@ static unsigned long scanStartTime = 0;
 static unsigned long wicanConnectionTimer = 0;
 static unsigned long lastOBDReconnectAttempt = 0;
 
+// WiFi non-blocking connect state
+static WiFiConnectPhase wifiConnectPhase = WIFI_IDLE;
+static unsigned long wifiConnectStartTime = 0;
+static String pendingSSID = "";
+static String pendingPass = "";
+static ProxyState pendingTargetState = STATE_SCANNING;
+static unsigned long wifiConnectTimeout = 0;
+
 static bool isScanningActive = false;
 static bool webServerRunning = false;
 static bool mqttFlushDone = false;
@@ -49,7 +67,7 @@ static bool timeSyncDone = false;
 static bool stateMachineInitLogged = false;
 static bool lastScanFailed = false;
 static bool isWebServerStarted = false;
-
+static bool otaInitialized = false;
 
 // Function declarations
 void transitionTo(ProxyState newState, const String& reason = "");
@@ -62,6 +80,9 @@ void flushQueueToMQTT();
 void publishHAAutoDiscovery();
 void setupWDT();
 void feedWDT();
+void beginWiFiConnect(const String& ssid, const String& pass, ProxyState target, unsigned long timeout);
+void checkWiFiConnect();
+void checkBootLoopProtection();
 
 void transitionTo(ProxyState newState, const String& reason) {
     if (newState == currentState && stateMachineInitLogged) {
@@ -77,7 +98,7 @@ void transitionTo(ProxyState newState, const String& reason) {
             if (reason.length() > 0) {
                 logEvent("SWITCH", "Reason: " + reason);
             }
-            
+
             disconnectOBD();
             WiFi.disconnect(true);
         }
@@ -86,31 +107,32 @@ void transitionTo(ProxyState newState, const String& reason) {
         webServerRunning = false;
         mqttFlushDone = false;
         lastScanFailed = false;
-    } 
+        wifiConnectPhase = WIFI_IDLE;
+    }
     else if (newState == STATE_CONNECTED_TO_WICAN) {
         wicanConnectionTimer = millis();
         lastOBDReconnectAttempt = millis();
-        
+
         // Clear cached data before new session
         memset(&latestCachedData, 0, sizeof(latestCachedData));
-        latestCachedData.src = "CAR_BUFFERED";
-        
+        strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
+
         // Attempt TCP OBD socket connection
         obdActive = connectOBD();
-        
+
         // Immediate pre-flight read cycle
         fetchOBDMetrics(true);
-        
+
         lastTelemetryFetch = millis();
         lastSlowTelemetryFetch = millis();
-    } 
+    }
     else if (newState == STATE_CONNECTED_TO_HOME) {
         mqttFlushDone = false;
         lastHomeRescanCheck = millis();
-        
+
         // Start NTP configuration with DST
         configTzTime(TZ_INFO, NTP_SERVER);
-        
+
         // Start minimal background WebServer once
         webServerRunning = true;
         if (!isWebServerStarted) {
@@ -118,18 +140,38 @@ void transitionTo(ProxyState newState, const String& reason) {
             isWebServerStarted = true;
             logEvent("WEBSERVER", "Debug server started at http://" + WiFi.localIP().toString() + "/debug");
         }
-        
+
+        // Initialize OTA once
+        if (!otaInitialized) {
+            ArduinoOTA.setHostname("eup-proxy");
+            ArduinoOTA.setPassword(OTA_PASSWORD);
+
+            ArduinoOTA.onStart([]() {
+                logEvent("OTA", "Update starting...");
+            });
+            ArduinoOTA.onEnd([]() {
+                logEvent("OTA", "Update complete. Rebooting...");
+            });
+            ArduinoOTA.onError([](ota_error_t error) {
+                logEvent("ERROR", "OTA failed, error: " + String(error));
+            });
+
+            ArduinoOTA.begin();
+            otaInitialized = true;
+            logEvent("OTA", "OTA service initialized on port 3232.");
+        }
+
         // Configure MQTT Broker
         mqttClient.setServer(MQTT_HOST, MQTT_PORT);
     }
-    
+
     currentState = newState;
     lastStateChange = millis();
 }
 
 
 void setupWDT() {
-    logEvent("BOOT", "Initializing hardware Watchdog...");
+    logEvent("BOOT", "Initializing hardware Watchdog (" + String(WDT_TIMEOUT_S) + "s)...");
     #if ESP_ARDUINO_VERSION_MAJOR >= 3
         esp_task_wdt_config_t wdt_config = {
             .timeout_ms = WDT_TIMEOUT_S * 1000,
@@ -148,9 +190,31 @@ void feedWDT() {
     esp_task_wdt_reset();
 }
 
+void checkBootLoopProtection() {
+    prefs.begin("proxy", false);
+    int crashCount = prefs.getInt(BOOT_CRASH_NVS_KEY, 0);
+
+    if (crashCount >= BOOT_CRASH_THRESHOLD) {
+        logEvent("BOOT", "WARNING: Boot-loop detected (" + String(crashCount) + " consecutive crashes). Resetting counter.");
+        prefs.putInt(BOOT_CRASH_NVS_KEY, 0);
+        // Could add safe-mode logic here in the future
+    } else {
+        // Increment crash counter — will be reset to 0 after successful NTP sync
+        prefs.putInt(BOOT_CRASH_NVS_KEY, crashCount + 1);
+        logEvent("BOOT", "Boot counter: " + String(crashCount + 1) + "/" + String(BOOT_CRASH_THRESHOLD));
+    }
+    prefs.end();
+}
+
+void resetBootCrashCounter() {
+    prefs.begin("proxy", false);
+    prefs.putInt(BOOT_CRASH_NVS_KEY, 0);
+    prefs.end();
+}
+
 void updateLED() {
     unsigned long currentMillis = millis();
-    
+
     switch (currentState) {
         case STATE_SCANNING: {
             if (currentMillis - lastLEDUpdate >= 100) {
@@ -179,21 +243,60 @@ void updateLED() {
     }
 }
 
+// Non-blocking WiFi connect: initiate
+void beginWiFiConnect(const String& ssid, const String& pass, ProxyState target, unsigned long timeout) {
+    pendingSSID = ssid;
+    pendingPass = pass;
+    pendingTargetState = target;
+    wifiConnectTimeout = timeout;
+    wifiConnectStartTime = millis();
+    wifiConnectPhase = WIFI_CONNECTING;
+
+    logEvent("SWITCH", "Connecting to: \"" + ssid + "\" (non-blocking, timeout: " + String(timeout / 1000) + "s)");
+    WiFi.begin(ssid.c_str(), pass.c_str());
+}
+
+// Non-blocking WiFi connect: poll
+void checkWiFiConnect() {
+    if (wifiConnectPhase != WIFI_CONNECTING) return;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        unsigned long duration = millis() - wifiConnectStartTime;
+        logEvent("SWITCH", "Connected. Duration: " + String(duration) + " ms. IP: " + WiFi.localIP().toString());
+        wifiConnectPhase = WIFI_IDLE;
+        transitionTo(pendingTargetState, pendingSSID + " connected");
+        return;
+    }
+
+    if (millis() - wifiConnectStartTime >= wifiConnectTimeout) {
+        logEvent("ERROR", "Failed to connect to " + pendingSSID + " (timeout)");
+        WiFi.disconnect(true);
+        wifiConnectPhase = WIFI_IDLE;
+        return;
+    }
+}
+
 void handleScanning() {
+    // If we're waiting for a non-blocking WiFi connect, just poll it
+    if (wifiConnectPhase == WIFI_CONNECTING) {
+        checkWiFiConnect();
+        return;
+    }
+
     unsigned long currentMillis = millis();
-    
+
     if (!isScanningActive) {
         if (!lastScanFailed) {
             logEvent("SCAN", "Starting non-blocking WiFi scan...");
         }
-        WiFi.scanNetworks(true, false); 
+        WiFi.scanNetworks(true, false);
         scanStartTime = currentMillis;
         isScanningActive = true;
         return;
     }
-    
+
     int scanResult = WiFi.scanComplete();
-    
+
     if (scanResult >= 0) {
         bool wicanFound = false;
         bool home1Found = false;
@@ -202,7 +305,7 @@ void handleScanning() {
         int32_t homeRSSI = -100;
         String homeSSID = "";
         String homePass = "";
-        
+
         int knownCount = 0;
         if (scanResult > 0) {
             for (int i = 0; i < scanResult; i++) {
@@ -212,22 +315,20 @@ void handleScanning() {
                 }
             }
         }
-        
+
         if (knownCount > 0) {
             lastScanFailed = false;
         }
-        
+
         if (!lastScanFailed) {
-            logEvent("SCAN", "Found " + String(knownCount) + " networks:");
+            logEvent("SCAN", "Found " + String(knownCount) + " known networks:");
         }
-        
+
         if (scanResult > 0) {
+            // Sort by RSSI descending using simple selection
             int* indices = new int[scanResult];
-            for (int i = 0; i < scanResult; i++) {
-                indices[i] = i;
-            }
-            
-            // Sort indices by RSSI descending
+            for (int i = 0; i < scanResult; i++) indices[i] = i;
+
             for (int i = 0; i < scanResult - 1; i++) {
                 for (int j = i + 1; j < scanResult; j++) {
                     if (WiFi.RSSI(indices[j]) > WiFi.RSSI(indices[i])) {
@@ -237,120 +338,89 @@ void handleScanning() {
                     }
                 }
             }
-            
+
             for (int k = 0; k < scanResult; k++) {
                 int i = indices[k];
                 String ssid = WiFi.SSID(i);
                 int32_t rssi = WiFi.RSSI(i);
                 int32_t channel = WiFi.channel(i);
-                
+
                 bool isKnown = (ssid == WICAN_SSID || ssid == HOME_SSID_1 || ssid == HOME_SSID_2);
                 if (isKnown) {
                     if (!lastScanFailed) {
                         String quotedSSID = "\"" + ssid + "\"";
-                        char scanBuf[128];
-                        snprintf(scanBuf, sizeof(scanBuf), "  SSID: %-15s RSSI: %d dBm  CH: %d", quotedSSID.c_str(), (int)rssi, (int)channel);
-                        logEvent("SCAN", String(scanBuf));
+                        logEvent("SCAN", "  " + quotedSSID + "  RSSI: " + String(rssi) + " dBm  CH: " + String(channel) + "  [KNOWN]");
                     }
-                }
-                
-                if (ssid == WICAN_SSID) {
-                    wicanFound = true;
-                    wicanRSSI = rssi;
-                } else if (ssid == HOME_SSID_1 && !wicanFound) {
-                    if (!home1Found && !home2Found) {
+
+                    if (ssid == WICAN_SSID && !wicanFound) {
+                        wicanFound = true;
+                        wicanRSSI = rssi;
+                    }
+                    if (ssid == HOME_SSID_1 && !home1Found) {
                         home1Found = true;
-                        homeSSID = HOME_SSID_1;
-                        homePass = HOME_PASS_1;
-                        homeRSSI = rssi;
+                        if (rssi > homeRSSI) {
+                            homeRSSI = rssi;
+                            homeSSID = HOME_SSID_1;
+                            homePass = HOME_PASS_1;
+                        }
                     }
-                } else if (ssid == HOME_SSID_2 && !wicanFound) {
-                    if (!home1Found && !home2Found) {
+                    if (ssid == HOME_SSID_2 && !home2Found) {
                         home2Found = true;
-                        homeSSID = HOME_SSID_2;
-                        homePass = HOME_PASS_2;
-                        homeRSSI = rssi;
+                        if (rssi > homeRSSI) {
+                            homeRSSI = rssi;
+                            homeSSID = HOME_SSID_2;
+                            homePass = HOME_PASS_2;
+                        }
                     }
                 }
             }
             delete[] indices;
         }
-        
+
         isScanningActive = false;
-        
+
         if (wicanFound) {
             logEvent("SCAN", "Priority target selected: \"" + String(WICAN_SSID) + "\"");
             WiFi.scanDelete();
-            
-            logEvent("SWITCH", "Connecting to: \"" + String(WICAN_SSID) + "\"  RSSI: " + String(wicanRSSI) + " dBm");
-            unsigned long startAttempt = millis();
-            WiFi.begin(WICAN_SSID, WICAN_PASS);
-            
-            while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-                updateLED();
-                feedWDT();
-                delay(50);
-            }
-            
-            if (WiFi.status() == WL_CONNECTED) {
-                unsigned long duration = millis() - startAttempt;
-                logEvent("SWITCH", "Connected. Duration: " + String(duration) + " ms. IP: " + WiFi.localIP().toString());
-                transitionTo(STATE_CONNECTED_TO_WICAN, "Wican found");
-            } else {
-                logEvent("ERROR", "Failed to connect to Wican AP!");
-                WiFi.disconnect(true);
-            }
-        } 
+            beginWiFiConnect(WICAN_SSID, WICAN_PASS, STATE_CONNECTED_TO_WICAN, WIFI_CONNECT_TIMEOUT_WICAN_MS);
+        }
         else if (home1Found || home2Found) {
             logEvent("SCAN", "Priority target selected: \"" + homeSSID + "\"");
             WiFi.scanDelete();
-            
-            logEvent("SWITCH", "Connecting to: \"" + homeSSID + "\"  RSSI: " + String(homeRSSI) + " dBm");
-            unsigned long startAttempt = millis();
-            WiFi.begin(homeSSID.c_str(), homePass.c_str());
-            
-            while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
-                updateLED();
-                feedWDT();
-                delay(50);
-            }
-            
-            if (WiFi.status() == WL_CONNECTED) {
-                unsigned long duration = millis() - startAttempt;
-                logEvent("SWITCH", "Connected. Duration: " + String(duration) + " ms. IP: " + WiFi.localIP().toString());
-                transitionTo(STATE_CONNECTED_TO_HOME);
-            } else {
-                logEvent("ERROR", "Failed to connect to Home WiFi!");
-                WiFi.disconnect(true);
-            }
-        } 
+            beginWiFiConnect(homeSSID, homePass, STATE_CONNECTED_TO_HOME, WIFI_CONNECT_TIMEOUT_HOME_MS);
+        }
         else {
             WiFi.scanDelete();
             if (!lastScanFailed) {
-                logEvent("SCAN", "No known networks found. Retrying in 30s.");
+                logEvent("SCAN", "No known networks found. Retrying in " + String(SCAN_RETRY_PAUSE_MS / 1000) + "s.");
                 lastScanFailed = true;
             }
-            
-            unsigned long pauseStart = millis();
-            while (millis() - pauseStart < 30000) {
-                updateLED();
-                feedWDT();
-                delay(50);
-            }
+
+            // Non-blocking pause: just set scanStartTime and don't start new scan until pause elapsed
+            scanStartTime = millis();
+            // isScanningActive stays false; next loop iteration will check timing
         }
-    } 
+    }
     else if (scanResult == WIFI_SCAN_FAILED) {
         if (!lastScanFailed) {
             logEvent("ERROR", "WiFi scan failed. Retrying...");
         }
         isScanningActive = false;
-    } 
+    }
     else if (currentMillis - scanStartTime > 15000) {
         if (!lastScanFailed) {
             logEvent("ERROR", "WiFi scan timed out! Restarting...");
         }
         WiFi.scanDelete();
         isScanningActive = false;
+    }
+
+    // Non-blocking scan retry pause
+    if (!isScanningActive && lastScanFailed && wifiConnectPhase == WIFI_IDLE) {
+        if (millis() - scanStartTime < SCAN_RETRY_PAUSE_MS) {
+            return; // Still in pause period, do nothing
+        }
+        // Pause elapsed, allow new scan on next loop
     }
 }
 
@@ -359,20 +429,20 @@ void fetchOBDMetrics(bool forceSlow) {
     if (obdActive) {
         bool groupAOk = queryGroupA(latestCachedData);
         bool groupBOk = true;
-        
+
         if (forceSlow) {
             groupBOk = queryGroupB(latestCachedData);
         }
-        
+
         if (groupAOk && groupBOk) {
             latestCachedData.ts = time(nullptr);
-            latestCachedData.src = "CAR_BUFFERED";
-            
+            strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
+
             logTelemetry(latestCachedData);
             if (forceSlow) {
                 logTelemetrySlow(latestCachedData);
             }
-            
+
             enqueueData(latestCachedData);
             return;
         } else {
@@ -381,21 +451,21 @@ void fetchOBDMetrics(bool forceSlow) {
             obdActive = false;
         }
     }
-    
+
     logEvent("WICAN", "Generating simulated telemetry payload...");
     generateSimulatedTelemetry(latestCachedData, false);
     if (forceSlow) {
         generateSimulatedTelemetry(latestCachedData, true);
     }
-    
+
     latestCachedData.ts = time(nullptr);
-    latestCachedData.src = "CAR_BUFFERED";
-    
+    strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
+
     logTelemetry(latestCachedData);
     if (forceSlow) {
         logTelemetrySlow(latestCachedData);
     }
-    
+
     enqueueData(latestCachedData);
 }
 
@@ -404,38 +474,38 @@ void handleWican() {
         transitionTo(STATE_SCANNING, "Wican signal lost");
         return;
     }
-    
+
     unsigned long currentMillis = millis();
-    
+
     if (obdActive) {
         runOBDKeepAlive();
     } else {
         // Active TCP Reconnection scheduler
-        if (currentMillis - lastOBDReconnectAttempt >= 15000) {
+        if (currentMillis - lastOBDReconnectAttempt >= OBD_RECONNECT_INTERVAL_MS) {
             lastOBDReconnectAttempt = currentMillis;
             logEvent("CONN", "OBD is offline. Attempting TCP reconnection...");
             obdActive = connectOBD();
             if (obdActive) {
                 logEvent("CONN", "OBD TCP connection re-established successfully.");
-                fetchOBDMetrics(true); // immediate pre-flight read
+                fetchOBDMetrics(true);
                 lastTelemetryFetch = currentMillis;
                 lastSlowTelemetryFetch = currentMillis;
             }
         }
-        
-        // Timeout if no OBD connection established within 60s
-        if (currentMillis - wicanConnectionTimer >= 60000) {
+
+        // Timeout if no OBD connection established
+        if (currentMillis - wicanConnectionTimer >= WICAN_TIMEOUT_MS) {
             transitionTo(STATE_SCANNING, "Wican timeout");
             return;
         }
     }
-    
-    if (currentMillis - lastSlowTelemetryFetch >= 600000) {
+
+    if (currentMillis - lastSlowTelemetryFetch >= POLL_INTERVAL_SLOW_MS) {
         lastSlowTelemetryFetch = currentMillis;
         fetchOBDMetrics(true);
         lastTelemetryFetch = currentMillis;
     }
-    else if (currentMillis - lastTelemetryFetch >= 60000) {
+    else if (currentMillis - lastTelemetryFetch >= POLL_INTERVAL_FAST_MS) {
         lastTelemetryFetch = currentMillis;
         fetchOBDMetrics(false);
     }
@@ -444,9 +514,9 @@ void handleWican() {
 
 void publishHAAutoDiscovery() {
     if (!mqttClient.connected()) return;
-    
+
     logEvent("CONN", "Publishing Home Assistant Auto-Discovery sensors...");
-    
+
     struct SensorDef {
         const char* id;
         const char* name;
@@ -455,7 +525,7 @@ void publishHAAutoDiscovery() {
         const char* valTpl;
         const char* icon;
     };
-    
+
     SensorDef sensors[] = {
         {"soc", "Battery SoC", "%", "battery", "{{ value_json.soc }}", nullptr},
         {"volt", "12V Voltage", "V", "voltage", "{{ value_json.volt }}", nullptr},
@@ -468,7 +538,7 @@ void publishHAAutoDiscovery() {
         {"bat_cap", "Battery Capacity", "Ah", nullptr, "{{ value_json.bat_cap }}", "mdi:battery-charging-100"},
         {"tp_alarm", "Tire Pressure Alarm", nullptr, nullptr, "{{ value_json.tp_alarm }}", "mdi:car-tire-alert"}
     };
-    
+
     for (const auto& s : sensors) {
         String topic = "homeassistant/sensor/eup_proxy_" + String(s.id) + "/config";
         JsonDocument doc;
@@ -476,24 +546,25 @@ void publishHAAutoDiscovery() {
         doc["stat_t"] = MQTT_TOPIC_DATA;
         if (s.unit) doc["unit_of_meas"] = s.unit;
         if (s.devClass) doc["dev_class"] = s.devClass;
+        doc["state_class"] = "measurement";
         doc["val_tpl"] = s.valTpl;
         doc["uniq_id"] = "eup_proxy_" + String(s.id);
         if (s.icon) doc["ic"] = s.icon;
-        
+
         JsonObject dev = doc["dev"].to<JsonObject>();
         dev["ids"] = "eup_proxy_esp32";
         dev["name"] = "e-up! Proxy";
-        dev["mf"] = "VW / evNotify-local";
+        dev["mf"] = "VW / local";
         dev["sw"] = FW_VERSION;
-        
+
         String payload;
         serializeJson(doc, payload);
         mqttClient.publish(topic.c_str(), payload.c_str(), true);
-        
+
         feedWDT();
         delay(20);
     }
-    
+
     {
         String topic = "homeassistant/sensor/eup_proxy_lastsync/config";
         JsonDocument doc;
@@ -502,59 +573,59 @@ void publishHAAutoDiscovery() {
         doc["dev_class"] = "timestamp";
         doc["uniq_id"] = "eup_proxy_lastsync";
         doc["ic"] = "mdi:sync";
-        
+
         JsonObject dev = doc["dev"].to<JsonObject>();
         dev["ids"] = "eup_proxy_esp32";
         dev["name"] = "e-up! Proxy";
-        dev["mf"] = "VW / evNotify-local";
+        dev["mf"] = "VW / local";
         dev["sw"] = FW_VERSION;
-        
+
         String payload;
         serializeJson(doc, payload);
         mqttClient.publish(topic.c_str(), payload.c_str(), true);
-        
+
         feedWDT();
         delay(20);
     }
-    
+
     logEvent("CONN", "Home Assistant Auto-Discovery published.");
 }
 
 void flushQueueToMQTT() {
     if (!mqttClient.connected()) {
         logEvent("MQTT", "Connecting to Broker " + String(MQTT_HOST) + "...");
-        
+
         String clientID = "eupProxy_" + String(ESP.getEfuseMac(), HEX);
-        
+
         bool connected = false;
         if (strlen(MQTT_USER) > 0) {
             connected = mqttClient.connect(clientID.c_str(), MQTT_USER, MQTT_PASS);
         } else {
             connected = mqttClient.connect(clientID.c_str());
         }
-        
+
         if (!connected) {
             logEvent("ERROR", "MQTT connection failed, state: " + String(mqttClient.state()));
             return;
         }
         logEvent("MQTT", "Successfully connected to Broker.");
-        
+
         publishHAAutoDiscovery();
     }
-    
+
     size_t queueSize = getQueueSize();
     if (queueSize == 0) {
         logEvent("MQTT", "No buffered data to flush.");
         mqttFlushDone = true;
         return;
     }
-    
+
     logEvent("MQTT", "Found " + String(queueSize) + " records to flush. Starting...");
-    
+
     String filepath;
     TelemetryData data;
     int flushCount = 0;
-    
+
     while (getNextQueuedFile(filepath, data)) {
         JsonDocument doc;
         doc["soc"] = data.soc;
@@ -569,24 +640,24 @@ void flushQueueToMQTT() {
         doc["tp_alarm"] = data.tp_alarm;
         doc["ts"] = data.ts;
         doc["src"] = data.src;
-        
+
         String payload;
         serializeJson(doc, payload);
-        
+
         logEvent("MQTT", "Publishing to topic " + String(MQTT_TOPIC_DATA) + ": " + payload);
         if (mqttClient.publish(MQTT_TOPIC_DATA, payload.c_str(), true)) {
             removeQueuedFile(filepath);
             flushCount++;
         } else {
             logEvent("ERROR", "Failed to publish message to topic " + String(MQTT_TOPIC_DATA) + "!");
-            break; 
+            break;
         }
-        
+
         feedWDT();
     }
-    
+
     logEvent("MQTT", "Flush finished. Dispatched " + String(flushCount) + " messages.");
-    
+
     struct tm timeinfo;
     char timeBuf[64] = "2026-05-21T11:05:04+02:00";
     if (getLocalTime(&timeinfo, 100)) {
@@ -600,10 +671,10 @@ void flushQueueToMQTT() {
         strftime(tBuf, sizeof(tBuf), "%Y-%m-%dT%H:%M:%S", &timeinfo);
         snprintf(timeBuf, sizeof(timeBuf), "%s%s", tBuf, tzStr.c_str());
     }
-    
+
     logEvent("MQTT", "Updating eup/lastSync: " + String(timeBuf));
     mqttClient.publish(MQTT_TOPIC_LASTSYNC, timeBuf, true);
-    
+
     mqttFlushDone = true;
 }
 
@@ -612,35 +683,43 @@ void handleHome() {
         transitionTo(STATE_SCANNING, "Home signal lost");
         return;
     }
-    
+
     if (webServerRunning) {
         server.handleClient();
     }
-    
+
+    // Handle OTA updates
+    if (otaInitialized) {
+        ArduinoOTA.handle();
+    }
+
     if (!timeSyncDone) {
         struct tm timeinfo;
         if (getLocalTime(&timeinfo, 100)) {
-            if (timeinfo.tm_year > 120) { // Year > 2020 (meaning NTP sync is active)
+            if (timeinfo.tm_year > 120) {
                 char timeBuf[16];
                 strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", &timeinfo);
-                
+
                 char tzBuf[10];
-                strftime(tzBuf, sizeof(tzBuf), "%Z", &timeinfo); // e.g. "CET" or "CEST"
-                
+                strftime(tzBuf, sizeof(tzBuf), "%Z", &timeinfo);
+
                 char offBuf[10];
-                strftime(offBuf, sizeof(offBuf), "%z", &timeinfo); // e.g. "+0100" or "+0200"
+                strftime(offBuf, sizeof(offBuf), "%z", &timeinfo);
                 String offStr = String(offBuf);
                 if (offStr.length() == 5) {
                     offStr = offStr.substring(0, 3) + ":" + offStr.substring(3);
                 }
-                
-                String localTimeMsg = "NTP synchronised. Local time: " + String(timeBuf) + 
+
+                String localTimeMsg = "NTP synchronised. Local time: " + String(timeBuf) +
                                       " (Europe/Berlin, " + String(tzBuf) + " " + offStr + ")";
-                
+
                 logEvent("BOOT", localTimeMsg);
                 timeSyncDone = true;
                 g_ntpSynchronized = true;
-                
+
+                // Successful boot: reset crash counter
+                resetBootCrashCounter();
+
                 if (!stateMachineInitLogged) {
                     logEvent("BOOT", "State machine initialised. Entering SCANNING.");
                     stateMachineInitLogged = true;
@@ -648,15 +727,15 @@ void handleHome() {
             }
         }
     }
-    
+
     if (!mqttFlushDone) {
         flushQueueToMQTT();
     }
-    
+
     unsigned long currentMillis = millis();
-    
-    if (currentMillis - lastHomeRescanCheck >= 300000) {
-        logEvent("STATE", "5-minute home period elapsed. Checking if prioritized Wican is nearby...");
+
+    if (currentMillis - lastHomeRescanCheck >= HOME_RESCAN_INTERVAL_MS) {
+        logEvent("STATE", String(HOME_RESCAN_INTERVAL_MS / 60000) + "-minute home period elapsed. Checking if prioritized Wican is nearby...");
         transitionTo(STATE_SCANNING);
     }
 }
@@ -664,38 +743,41 @@ void handleHome() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    
+
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
-    
+
     // Initialize WiFi mode early so MAC address registers correctly
     WiFi.mode(WIFI_STA);
-    
+
     initLogger();
     initBuffer();
-    
+
     logBootSequence(WiFi.macAddress(), 50, getQueueSize());
-    
+
+    // Boot-loop protection check
+    checkBootLoopProtection();
+
     // Pre-register debug endpoint handler once
     server.on("/debug", HTTP_GET, []() {
         logEvent("WEBSERVER", "GET /debug endpoint requested.");
         streamLog(server);
     });
-    
+
     setupWDT();
-    
+
     transitionTo(STATE_SCANNING);
 }
 
 void loop() {
     feedWDT();
     updateLED();
-    
+
     if (!stateMachineInitLogged && millis() > 10000) {
         logEvent("BOOT", "State machine initialised. Entering SCANNING.");
         stateMachineInitLogged = true;
     }
-    
+
     switch (currentState) {
         case STATE_SCANNING:
             handleScanning();
@@ -707,6 +789,6 @@ void loop() {
             handleHome();
             break;
     }
-    
+
     delay(1);
 }

@@ -1,108 +1,258 @@
-# Implementation Plan - WICAN TCP Connection Resilience & Timezone-Aware Logging
+# Implementation Plan — Prio 2 (Refactoring) + Prio 3 (Tests)
 
-This plan addresses the WICAN dongle connection issues (specifically the design flaw where a connection failure locks the proxy in simulation fallback forever) and brings the system into full compliance with the newly updated `SPEC.md` log prefix and scan layout specifications.
+## Ziel
 
----
-
-## 1. Problem Analysis & Goals
-
-### 1.1 WICAN Connection Resilience (Critical Connection Design Flaw)
-*   **The Issue:** When entering `STATE_CONNECTED_TO_WICAN`, `connectOBD()` is called once. If the WICAN dongle's TCP port `35000` is not yet open, or there is a transient failure, `obdActive` is set to `false`. The proxy then drops into simulation fallback forever without *ever* retrying `connectOBD()` while remaining connected to the Wican AP.
-*   **The Solution:** 
-    1.  Introduce an active reconnection scheduler in `handleWican()` that periodically (every 15 seconds) attempts to reconnect via `connectOBD()` if `obdActive` is false.
-    2.  Implement a strict **Wican Timeout** of 60 seconds. If the proxy remains connected to the Wican Wi-Fi but cannot establish a successful TCP connection and get valid OBD responses within 60 seconds, it must disconnect from Wican, log the transition reason `Wican timeout`, and fall back to `STATE_SCANNING` so it can reconnect to Home Wi-Fi or scan again.
-
-### 1.2 Timezone-Aware Dynamic Log Prefix
-*   **The Issue:** Currently, the prefix is statically set to `[T+<ms>]`. The updated `SPEC.md` requires:
-    *   **Before NTP Sync:** Prefix must be `[T+<ms>]` (milliseconds since boot) and messages must be prefixed with `[NO-NTP]`, e.g., `[T+312] [BOOT] [NO-NTP] LittleFS mounted...`
-    *   **After NTP Sync:** Prefix must dynamically change to local wall-clock time in the `Europe/Berlin` timezone: `[hh:mm:ss] [<LEVEL>] <message>`, e.g., `[17:35:02] [BOOT] State machine initialised.`
-*   **The Solution:**
-    1.  Expose the NTP synchronization status as a global variable `extern bool g_ntpSynchronized` declared in `logger.h` and defined in `logger.cpp`.
-    2.  Update `logEvent` inside `logger.cpp` to dynamically format the time prefix. If `g_ntpSynchronized` is true, use `getLocalTime()` to extract `[hh:mm:ss]`. Otherwise, use `[T+<ms>]` and prefix the message with `[NO-NTP] ` (except for the startup message `e-up!Proxy starting`).
-    3.  Set `g_ntpSynchronized = true` in `main.cpp` as soon as NTP synchronization completes.
-
-### 1.3 Wi-Fi Scan Logging Format
-*   **The Issue:** Wi-Fi scan results are logged in their discovery order. The new spec requires scan results to be sorted by RSSI descending and formatted precisely as:
-    `[hh:mm:ss] [SCAN]   SSID: "WicanAP"      RSSI: -58 dBm  CH: 6` (using the correct timezone/boot prefix).
-*   **The Solution:** Sort the discovered network indices by their RSSI in descending order using a robust bubble sort, then format the SSID, RSSI, and channel with the exact padding specified.
+`main.cpp` (713 LOC, 7 Verantwortlichkeiten) in wartbare Module aufbrechen, blockierende WiFi-Connects eliminieren, und eine PlatformIO-native Testinfrastruktur aufbauen — ohne das Laufzeitverhalten zu verändern.
 
 ---
 
-## 2. Proposed Changes
+## Prio 2 — Refactoring
 
-### Component 1: Core Logger (`logger.h` & `logger.cpp`)
+### 2.3 State-Context-Struct (wird zuerst gemacht, weil 2.1 darauf aufbaut)
 
-#### [MODIFY] [logger.h](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up!Proxy/include/logger.h)
-*   Add `extern bool g_ntpSynchronized;` to allow `main.cpp` to communicate the NTP status to the logging subsystem.
+#### [NEW] [proxy_context.h](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/include/proxy_context.h)
 
-#### [MODIFY] [logger.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up!Proxy/src/logger.cpp)
-*   Implement `bool g_ntpSynchronized = false;`.
-*   Create a helper function `String getLogTimePrefix()` to return the timezone-aware string `[hh:mm:ss]` (via `getLocalTime`) if `g_ntpSynchronized` is true, or `[T+<ms>]` if false.
-*   Update `logEvent(const String& level, const String& message)` to format the log entries exactly according to the spec, adding the `[NO-NTP]` prefix to the message when `g_ntpSynchronized` is false (excluding the startup line).
-*   Update `logTelemetry` to use degree symbol `°` in `Temp` to match the exact spec output: `SoC=82.5% Temp=18°C Cap=61.5Ah Volt=12.4V TpAlarm=0`.
+Bündelt alle 17 globalen/statischen Variablen aus `main.cpp` in eine Struktur mit klaren Lifecycle-Kommentaren:
+
+```cpp
+struct ProxyContext {
+    // --- State ---
+    ProxyState state = STATE_SCANNING;
+
+    // --- Timing (millis-based, survive reboots: NO) ---
+    unsigned long lastStateChange = 0;
+    unsigned long lastLEDUpdate = 0;
+    unsigned long lastTelemetryFetch = 0;
+    unsigned long lastSlowTelemetryFetch = 0;
+    unsigned long lastHomeRescanCheck = 0;
+    unsigned long scanStartTime = 0;
+    unsigned long wicanConnectionTimer = 0;
+    unsigned long lastOBDReconnectAttempt = 0;
+
+    // --- Flags (reset on transition unless noted) ---
+    bool obdActive = false;
+    bool isScanningActive = false;
+    bool webServerRunning = false;
+    bool mqttFlushDone = false;
+    bool lastScanFailed = false;
+
+    // --- Flags (survive transitions — set once per boot) ---
+    bool timeSyncDone = false;
+    bool stateMachineInitLogged = false;
+    bool isWebServerStarted = false;
+
+    // --- WiFi connection state (non-blocking) ---
+    enum WiFiPhase { WIFI_IDLE, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_FAILED };
+    WiFiPhase wifiPhase = WIFI_IDLE;
+    unsigned long wifiConnectStart = 0;
+    String targetSSID;
+    String targetPass;
+    int32_t targetRSSI = -100;
+    ProxyState targetState = STATE_SCANNING; // where to go on success
+
+    // --- Telemetry cache ---
+    TelemetryData latestData;
+};
+```
+
+Die `ProxyState`-Enum-Definition wandert ebenfalls in diese Header-Datei, da sie von mehreren Modulen gebraucht wird.
 
 ---
 
-### Component 2: Main Application (`main.cpp`)
+### 2.1 main.cpp aufbrechen
 
-#### [MODIFY] [main.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up!Proxy/src/main.cpp)
-*   Add active scheduler tracking variables:
-    *   `static unsigned long wicanConnectionTimer = 0;` (tracks when Wican Wi-Fi was established).
-    *   `static unsigned long lastOBDReconnectAttempt = 0;` (tracks periodic 15s TCP connection retries).
-*   Update `transitionTo()`:
-    *   Initialize `wicanConnectionTimer = millis();` and `lastOBDReconnectAttempt = millis();` when transitioning to `STATE_CONNECTED_TO_WICAN`.
-    *   Log `[SWITCH] Disconnecting from: "<SSID>"` and `[SWITCH] Reason: <reason>` when transitioning to `STATE_SCANNING` from Wican or Home.
-*   Update `handleScanning()`:
-    *   Sort the Wi-Fi networks in descending order of RSSI before logging.
-    *   Print scan logs exactly matching the padding layout: `[SCAN]   SSID: "WicanAP"      RSSI: -58 dBm  CH: 6` (using the correct dynamically formatted time prefix).
-    *   Log `[SCAN] No known networks found. Retrying in 5s.` when scanning returns no priority networks.
-    *   Transition to `STATE_CONNECTED_TO_WICAN` with reason `"Wican found"` when Wican is selected.
-    *   Transition to `STATE_CONNECTED_TO_HOME` with the correct connecting transition logs.
-*   Update `handleWican()`:
-    *   If `obdActive` is false:
-        *   If `millis() - lastOBDReconnectAttempt >= 15000` (15 seconds):
-            *   Log an event and call `connectOBD()`.
-            *   If connection succeeds, set `obdActive = true` and trigger an immediate pre-flight OBD read (`fetchOBDMetrics(true)`).
-        *   If `millis() - wicanConnectionTimer >= 60000` (60 seconds connection timeout):
-            *   Disconnect from Wican AP and transition to `STATE_SCANNING` with reason `"Wican timeout"`.
-*   Update NTP Synchronization in `handleHome()`:
-    *   When the local time year > 120 (after 2020), set `g_ntpSynchronized = true`.
-    *   Format and log `NTP synchronised. Local time: <time> (Europe/Berlin, <TZ> <Offset>)` exactly as shown in the spec.
+#### [NEW] [wifi_manager.h](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/include/wifi_manager.h) / [wifi_manager.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/src/wifi_manager.cpp)
+
+**Verantwortung:** WiFi-Scanning, SSID-Priorisierung, non-blocking Verbindungsaufbau
+
+Übernimmt aus `main.cpp`:
+- `handleScanning()` (~170 Zeilen) → wird non-blocking umgebaut (Prio 2.2)
+- WiFi-Verbindungslogik (SSID-Sortierung, Known-Network-Filter)
+
+**API:**
+```cpp
+void initWiFi();                          // WiFi.mode(WIFI_STA)
+void handleScanning(ProxyContext& ctx);   // Non-blocking scan + connect
+void handleWiFiConnecting(ProxyContext& ctx); // Non-blocking connect poll
+```
+
+#### [NEW] [mqtt_manager.h](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/include/mqtt_manager.h) / [mqtt_manager.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/src/mqtt_manager.cpp)
+
+**Verantwortung:** MQTT-Verbindung, Queue-Flush, HA Auto-Discovery
+
+Übernimmt aus `main.cpp`:
+- `flushQueueToMQTT()` (~85 Zeilen)
+- `publishHAAutoDiscovery()` (~75 Zeilen)
+
+**API:**
+```cpp
+void initMQTT();                         // Broker-Konfiguration
+void handleMQTTFlush(ProxyContext& ctx);  // Connect + flush + lastSync
+```
+
+#### [MODIFY] [main.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/src/main.cpp)
+
+**Ziel: ~200 LOC** (von aktuell 713). Wird zum schlanken Orchestrator:
+- `setup()` — Init-Kette aufrufen
+- `loop()` — WDT feed, LED update, State-Handler dispatchen
+- `transitionTo()` — State-Übergänge, Flags in `ProxyContext` setzen
+- `handleWican()` — OBD-Orchestrierung (bleibt in main, da eng mit State-Machine gekoppelt)
+- `handleHome()` — NTP-Sync, WebServer, Rescan-Timer
+- `updateLED()` — LED-Patterns
+- `fetchOBDMetrics()` — OBD-Abfrage-Orchestrierung
 
 ---
 
-## 3. Verification Plan
+### 2.2 Non-blocking WiFi-Connects
 
-### 3.1 Automated / Compiler Verification
-*   Compile inside the WSL2 environment using PlatformIO:
-    ```bash
-    wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "pio run"
-    ```
-*   Verify the compilation is clean with 0 warnings.
-*   Copy the compiled binary to the `artifacts/` folder:
-    ```bash
-    wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "cp .pio/build/esp32dev/firmware.bin artifacts/firmware.bin"
-    ```
+Die drei blockierenden `while (WiFi.status() != WL_CONNECTED)` Schleifen werden durch einen State-basierten Ansatz ersetzt:
 
-### 3.2 Manual & Runtime Verification
-1.  **Check ESP32 serial presence:**
-    ```bash
-    wsl -d Ubuntu-22.04 bash -l -c "ls /dev/ttyACM0"
-    ```
-2.  **Flash the firmware (after explicit user approval):**
-    ```bash
-    wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "pio run --target upload --upload-port /dev/ttyACM0"
-    ```
-3.  **Boot & Scanning Verification:**
-    *   Monitor the boot messages to ensure `[T+<ms>] [BOOT] [NO-NTP]` prefix is printed.
-    *   Monitor scanning logs to verify networks are sorted by RSSI descending and match the spacing:
-        `  SSID: "WicanAP"      RSSI: -58 dBm  CH: 6`.
-4.  **Wican Reconnection & Timeout Verification:**
-    *   Force a connection to WICAN while its TCP server is disabled/closed (or simulate it).
-    *   Verify that the proxy prints a connection retry log every 15 seconds.
-    *   Verify that after 60 seconds of failing to establish an OBD connection, the proxy disconnects with log `[SWITCH] Reason: Wican timeout` and transitions back to `STATE_SCANNING`.
-5.  **NTP & Timezone Prefix Verification:**
-    *   Connect the proxy to the Home Wi-Fi (`partlycloudy`).
-    *   Verify the `NTP synchronised. Local time: ...` log appears, and that subsequent logs seamlessly transition to using the `[hh:mm:ss]` prefix (e.g. `[17:35:04]`).
-6.  **WebServer Verification:**
-    *   Access `http://192.168.1.55/debug` in the browser to view the dynamic log files stream smoothly without any formatting glitches or chunking failures.
+**Statt:**
+```cpp
+WiFi.begin(ssid, pass);
+while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+    delay(50);  // ← BLOCKIERT 10 Sekunden
+}
+```
+
+**Wird:**
+```cpp
+// In handleScanning() — einmalig beim Fund eines Netzwerks:
+ctx.wifiPhase = WIFI_CONNECTING;
+ctx.wifiConnectStart = millis();
+ctx.targetSSID = ssid;
+WiFi.begin(ssid, pass);
+
+// In handleWiFiConnecting() — pro loop()-Iteration:
+if (WiFi.status() == WL_CONNECTED) {
+    ctx.wifiPhase = WIFI_CONNECTED;
+    transitionTo(ctx.targetState, ...);
+} else if (millis() - ctx.wifiConnectStart >= timeout) {
+    ctx.wifiPhase = WIFI_FAILED;
+    WiFi.disconnect(true);
+}
+```
+
+Ebenso wird die 30-Sekunden-Scan-Pause non-blocking über einen Timer in `ProxyContext` gelöst.
+
+---
+
+### 2.4 enqueueData()-Rückgabewert prüfen
+
+#### [MODIFY] [main.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/src/main.cpp)
+
+An beiden Aufrufstellen von `enqueueData()` (Zeile 376 und 399) wird der Rückgabewert geprüft und bei Fehler ein `[ERROR]`-Log geschrieben:
+
+```cpp
+if (!enqueueData(latestCachedData)) {
+    logEvent("ERROR", "Failed to enqueue telemetry data!");
+}
+```
+
+---
+
+## Prio 3 — Testinfrastruktur
+
+### Architektur-Entscheidung
+
+**PlatformIO `native` Environment** — Tests laufen auf dem Host-Rechner (Linux/WSL2), nicht auf dem ESP32. Das ermöglicht schnelle Compile-Test-Zyklen ohne Hardware.
+
+**Test-Framework:** Unity (PlatformIO-Standard für C/C++).
+
+**Strategie:** Testbare Logik wird in pure Functions extrahiert, die keine ESP32-Hardware-Abhängigkeiten haben. Hardware-nahe Funktionen (WiFi, LittleFS, TCP) werden *nicht* gemockt — die Tests fokussieren auf Parsing, Berechnung und Serialisierung.
+
+#### [MODIFY] [platformio.ini](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/platformio.ini)
+
+Neues native Test-Environment:
+```ini
+[env:native]
+platform = native
+build_flags = -DUNIT_TEST
+lib_deps =
+    bblanchon/ArduinoJson @ ^7.0.4
+test_framework = unity
+```
+
+#### [NEW] [test/test_native/test_obd_parsing.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/test/test_native/test_obd_parsing.cpp)
+
+Testet die UDS-Response-Parsing-Logik (extrahiert aus OBDManager):
+- `extractUDSPayload("6202 8C CE", "028C", 1)` → `0xCE` → SoC = 82.4%
+- `extractUDSPayload("622261 0267", "22E1", 2)` → `0x0267` → Cap = 61.5 Ah
+- Edge Cases: leere Response, Timeout-Response, `NO DATA`, falsche DID
+
+Dafür wird eine pure Parsing-Funktion aus `queryUDS*Byte()` extrahiert:
+
+#### [MODIFY] [OBDManager.h](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/include/OBDManager.h) / [OBDManager.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/src/OBDManager.cpp)
+
+Neue testbare Funktionen (public API):
+```cpp
+// Pure parsing — no hardware dependency
+String stripWhitespace(const String& str);  // war static, wird public
+bool extractUDSPayload(const String& rawResponse, const String& did,
+                       int byteCount, long& outRaw);
+float deriveRange(float soc, float temp, float bat_cap); // war static void
+```
+
+#### [NEW] [test/test_native/test_range.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/test/test_native/test_range.cpp)
+
+Testet `deriveRange()`:
+- Warm (18°C) → Coefficient 5.5
+- Cold (10°C) → Coefficient 4.5
+- Frozen (-5°C) → Coefficient 3.5
+- Edge: 0°C genau → 3.5 (Grenzwert ≤)
+
+#### [NEW] [test/test_native/test_log_prefix.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/test/test_native/test_log_prefix.cpp)
+
+Testet die Prefix-Logik des Loggers (extrahiert):
+- `g_ntpSynchronized = false` → Prefix beginnt mit `[T+`
+- `g_ntpSynchronized = true` → Prefix beginnt mit `[HH:MM:SS]`
+- NO-NTP Prefix wird korrekt eingefügt/ausgelassen
+
+#### [NEW] [test/test_native/test_buffer_json.cpp](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up%21Proxy/test/test_native/test_buffer_json.cpp)
+
+Testet die JSON-Serialisierung/Deserialisierung der `TelemetryData`-Struktur:
+- Roundtrip: Struct → JSON → Struct mit identischen Werten
+- Edge: `src` = leerer String
+- Edge: `ts` = 0
+
+> [!IMPORTANT]
+> Die Buffer-Tests prüfen nur die JSON-Serialisierung, nicht das LittleFS-Dateisystem. Filesystem-Tests würden ein vollständiges Mock erfordern — das ist für den ersten Testaufbau zu aufwändig.
+
+---
+
+## Zusammenfassung: Neue Dateistruktur
+
+```
+include/
+├── proxy_context.h    [NEW]  — ProxyState enum, ProxyContext struct
+├── wifi_manager.h     [NEW]  — WiFi scan/connect API
+├── mqtt_manager.h     [NEW]  — MQTT flush/discovery API
+├── OBDManager.h       [MOD]  — extractUDSPayload(), deriveRange() public
+├── buffer.h                  — unverändert
+├── config.h                  — unverändert (gitignored)
+├── config.example.h          — unverändert
+└── logger.h                  — unverändert
+
+src/
+├── main.cpp           [MOD]  — ~200 LOC Orchestrator (von 713)
+├── wifi_manager.cpp   [NEW]  — Scan-Logik, non-blocking connect
+├── mqtt_manager.cpp   [NEW]  — Flush, HA discovery
+├── OBDManager.cpp     [MOD]  — Parsing-Funktionen public
+├── buffer.cpp                — unverändert
+└── logger.cpp                — unverändert
+
+test/test_native/
+├── test_obd_parsing.cpp  [NEW]  — UDS hex parsing
+├── test_range.cpp        [NEW]  — Range derivation
+├── test_log_prefix.cpp   [NEW]  — Log prefix logic
+└── test_buffer_json.cpp  [NEW]  — TelemetryData JSON roundtrip
+```
+
+---
+
+## Verifikationsplan
+
+1. **Compile ESP32:** `pio run -e esp32dev` — 0 Warnings
+2. **Run native Tests:** `pio test -e native` — alle grün
+3. **Binärvergleich:** RAM/Flash-Verbrauch darf sich nicht signifikant ändern (±1%)
+4. **Funktionsvergleich:** Laufzeitverhalten identisch — gleiche Log-Ausgaben, gleiche MQTT-Payloads, gleiche State-Übergänge

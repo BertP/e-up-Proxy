@@ -334,8 +334,8 @@ All payloads use HA MQTT abbreviations (`stat_t`, `val_tpl`, `uniq_id`, `unit_of
   "dev": {
     "ids": "eup_proxy_esp32",
     "name": "e-up! Proxy",
-    "mf": "VW / evNotify-local",
-    "sw": "2.1-ota-logfix"
+    "mf": "VW / local",
+    "sw": "2.2-retro-sweep"
   }
 }
 ```
@@ -354,8 +354,8 @@ All payloads use HA MQTT abbreviations (`stat_t`, `val_tpl`, `uniq_id`, `unit_of
   "dev": {
     "ids": "eup_proxy_esp32",
     "name": "e-up! Proxy",
-    "mf": "VW / evNotify-local",
-    "sw": "2.1-ota-logfix"
+    "mf": "VW / local",
+    "sw": "2.2-retro-sweep"
   }
 }
 ```
@@ -368,7 +368,7 @@ To create the `e-up!Proxy` user with the required write permissions in Home Assi
 
 1. Enable **Advanced Mode** in your HA profile (required to access user management).
 2. Go to **Settings → People → Users tab → Add User**.
-3. Set Name: `e-up! Proxy`, Username: `e-up!Proxy`, Password: `#4TheCar!`.
+3. Set Name: `e-up! Proxy`, Username: `<see config.h>`, Password: `<see config.h>`.
 4. Enable **"Allow this user to log in as administrator"**.
 5. Restart the **Mosquitto Broker** add-on to reload permissions.
 6. Flash and restart the ESP32 proxy.

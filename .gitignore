@@ -11,3 +11,11 @@ artifacts/firmware_*.bin
 # IDE
 .vscode/
 .idea/
+
+# Local logs
+log.log
+*.log
+
+# Native test directories
+test_queue/
+test_fs/

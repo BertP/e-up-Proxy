@@ -8,7 +8,8 @@ static String currentHeader = "";
 static unsigned long lastTesterPresent = 0;
 
 static String stripWhitespace(const String& str) {
-    String clean = "";
+    String clean;
+    clean.reserve(str.length()); // Pre-allocate to avoid O(n^2) reallocation
     for (unsigned int i = 0; i < str.length(); i++) {
         char c = str[i];
         if (c != ' ' && c != '\r' && c != '\n') {
@@ -18,26 +19,28 @@ static String stripWhitespace(const String& str) {
     return clean;
 }
 
-static String sendCommand(const String& cmd, unsigned int timeout = 1200) {
+static String sendCommand(const String& cmd, unsigned int timeout = OBD_CMD_TIMEOUT_MS) {
     if (!obdClient.connected()) {
         return "";
     }
-    
+
     // Clear read buffer
     while (obdClient.available()) {
         obdClient.read();
     }
-    
+
     // Send command with carriage return
     obdClient.print(cmd + "\r");
-    
+
     // Read response until '>' prompt or timeout
     String response = "";
     unsigned long start = millis();
+    bool timedOut = true;
     while (millis() - start < timeout) {
         if (obdClient.available()) {
             char c = obdClient.read();
             if (c == '>') {
+                timedOut = false;
                 break;
             }
             response += c;
@@ -45,23 +48,31 @@ static String sendCommand(const String& cmd, unsigned int timeout = 1200) {
         yield();
     }
     response.trim();
+
+    if (timedOut && response.length() == 0) {
+        logEvent("OBD-TIMEOUT", "No response for command: " + cmd + " (timeout: " + String(timeout) + "ms)");
+    } else if (timedOut) {
+        logEvent("OBD-TIMEOUT", "Partial response for command: " + cmd + " -> \"" + response + "\" (timeout: " + String(timeout) + "ms)");
+    }
+
     return response;
 }
+
 
 static bool setHeader(const String& header) {
     if (currentHeader == header) {
         return true;
     }
-    
+
     logEvent("CONN", "Switching CAN Header to " + header);
     String resp = sendCommand("AT SH " + header);
     String clean = stripWhitespace(resp);
-    
+
     if (clean.equalsIgnoreCase("OK") || clean.indexOf("OK") >= 0 || clean.length() == 0) {
         currentHeader = header;
         return true;
     }
-    
+
     logEvent("ERROR", "Failed to switch header to " + header + " - Response: " + resp);
     return false;
 }
@@ -69,22 +80,22 @@ static bool setHeader(const String& header) {
 bool connectOBD() {
     logEvent("CONN", "Connecting to OBD TCP Gateway " + String(WICAN_IP) + ":" + String(WICAN_PORT) + "...");
     obdClient.setTimeout(3); // 3 seconds timeout
-    
+
     if (!obdClient.connect(WICAN_IP, WICAN_PORT)) {
         logEvent("ERROR", "OBD TCP connection failed!");
         return false;
     }
-    
+
     logEvent("CONN", "OBD TCP connected. Running ELM327 init sequence...");
     currentHeader = ""; // Reset cached header
-    
+
     // ELM327 Init Sequence
     const char* initCmds[] = { "AT E0", "AT L0", "AT H0", "AT SP 6", "AT AT 1", "AT ST FF" };
     for (const char* cmd : initCmds) {
         String resp = sendCommand(cmd);
         logEvent("CONN", "ELM327 Init: " + String(cmd) + " -> " + resp);
     }
-    
+
     // Open UDS Extended Diagnostic Session on ECU 7E5
     if (setHeader("7E5")) {
         logEvent("CONN", "Opening UDS extended diagnostic session (10 03) on 7E5...");
@@ -98,7 +109,7 @@ bool connectOBD() {
             logEvent("ERROR", "Failed to open UDS extended session! Response: " + resp);
         }
     }
-    
+
     disconnectOBD();
     return false;
 }
@@ -114,10 +125,10 @@ void runOBDKeepAlive() {
     if (!obdClient.connected()) {
         return;
     }
-    
+
     unsigned long now = millis();
-    // Keep active with 3E 80 (Tester Present, suppress response) every 2.5 seconds
-    if (now - lastTesterPresent >= 2500) {
+    // Keep active with 3E 80 (Tester Present, suppress response)
+    if (now - lastTesterPresent >= TESTER_PRESENT_INTERVAL_MS) {
         lastTesterPresent = now;
         // Temporarily ensure 7E5 header is selected for session keep-alive
         String savedHeader = currentHeader;
@@ -132,65 +143,84 @@ void runOBDKeepAlive() {
 
 static bool queryUDS1Byte(const String& header, const String& did, float& outVal, float scale, float offset) {
     if (!setHeader(header)) return false;
-    
+
     String cmd = "22 " + did;
     String resp = sendCommand(cmd);
     String clean = stripWhitespace(resp);
-    
+
     // Expected positive response format starts with UDS response code 62 + DID
     String expectedPrefix = "62" + stripWhitespace(did);
     int prefixIndex = clean.indexOf(expectedPrefix);
-    
+
     if (prefixIndex >= 0 && clean.length() >= prefixIndex + expectedPrefix.length() + 2) {
         String hexByte = clean.substring(prefixIndex + expectedPrefix.length(), prefixIndex + expectedPrefix.length() + 2);
         long rawVal = strtol(hexByte.c_str(), NULL, 16);
         outVal = (rawVal * scale) + offset;
         return true;
     }
-    
-    logEvent("ERROR", "OBD query failed: DID " + did + " — raw response: \"" + resp + "\"");
+
+    // Distinguish between NRC and empty response
+    if (clean.length() == 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+    } else if (clean.indexOf("7F") >= 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+    } else {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+    }
     return false;
 }
 
 static bool queryUDS2Bytes(const String& header, const String& did, float& outVal, float scale, float offset) {
     if (!setHeader(header)) return false;
-    
+
     String cmd = "22 " + did;
     String resp = sendCommand(cmd);
     String clean = stripWhitespace(resp);
-    
+
     String expectedPrefix = "62" + stripWhitespace(did);
     int prefixIndex = clean.indexOf(expectedPrefix);
-    
+
     if (prefixIndex >= 0 && clean.length() >= prefixIndex + expectedPrefix.length() + 4) {
         String hexBytes = clean.substring(prefixIndex + expectedPrefix.length(), prefixIndex + expectedPrefix.length() + 4);
         long rawVal = strtol(hexBytes.c_str(), NULL, 16);
         outVal = (rawVal * scale) + offset;
         return true;
     }
-    
-    logEvent("ERROR", "OBD query failed: DID " + did + " — raw response: \"" + resp + "\"");
+
+    if (clean.length() == 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+    } else if (clean.indexOf("7F") >= 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+    } else {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+    }
     return false;
 }
 
 static bool queryUDS3Bytes(const String& header, const String& did, float& outVal, float scale, float offset) {
     if (!setHeader(header)) return false;
-    
+
     String cmd = "22 " + did;
     String resp = sendCommand(cmd);
     String clean = stripWhitespace(resp);
-    
+
     String expectedPrefix = "62" + stripWhitespace(did);
     int prefixIndex = clean.indexOf(expectedPrefix);
-    
+
     if (prefixIndex >= 0 && clean.length() >= prefixIndex + expectedPrefix.length() + 6) {
         String hexBytes = clean.substring(prefixIndex + expectedPrefix.length(), prefixIndex + expectedPrefix.length() + 6);
         long rawVal = strtol(hexBytes.c_str(), NULL, 16);
         outVal = (rawVal * scale) + offset;
         return true;
     }
-    
-    logEvent("ERROR", "OBD query failed: DID " + did + " — raw response: \"" + resp + "\"");
+
+    if (clean.length() == 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+    } else if (clean.indexOf("7F") >= 0) {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+    } else {
+        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+    }
     return false;
 }
 
@@ -208,9 +238,9 @@ bool queryGroupA(TelemetryData& data) {
     if (!obdClient.connected()) {
         return false;
     }
-    
+
     bool ok = true;
-    
+
     // 1. SoC (7E5, DID 02 8C, raw * 0.4)
     float socVal = 0.0f;
     if (queryUDS1Byte("7E5", "02 8C", socVal, 0.4f, 0.0f)) {
@@ -218,7 +248,7 @@ bool queryGroupA(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 2. Temp (7E5, DID 11 62, raw - 40)
     float tempVal = 0.0f;
     if (queryUDS1Byte("7E5", "11 62", tempVal, 1.0f, -40.0f)) {
@@ -226,7 +256,7 @@ bool queryGroupA(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 3. Battery Capacity (7E5, DID 22 E1, raw * 0.1)
     float capVal = 0.0f;
     if (queryUDS2Bytes("7E5", "22 E1", capVal, 0.1f, 0.0f)) {
@@ -234,11 +264,10 @@ bool queryGroupA(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 4. 12V Voltage (AT RV)
     String rvResp = sendCommand("AT RV");
     String cleanRv = stripWhitespace(rvResp);
-    // Find numeric characters in RV response
     float voltVal = 0.0f;
     if (cleanRv.length() > 0) {
         voltVal = cleanRv.toFloat();
@@ -251,7 +280,7 @@ bool queryGroupA(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 5. Tire Pressure Alarm (7E0, DID 02 1A, raw)
     float tpVal = 0.0f;
     if (queryUDS1Byte("7E0", "02 1A", tpVal, 1.0f, 0.0f)) {
@@ -259,15 +288,13 @@ bool queryGroupA(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // Derive Range
     if (ok) {
         deriveRange(data);
-        
-        // Power derivation placeholder (0.0W when static/idle)
-        data.power = 0.0f;
+        data.power = 0.0f; // Power derivation placeholder
     }
-    
+
     return ok;
 }
 
@@ -275,9 +302,9 @@ bool queryGroupB(TelemetryData& data) {
     if (!obdClient.connected()) {
         return false;
     }
-    
+
     bool ok = true;
-    
+
     // 1. Odometer (7E0, DID 22 03, raw 3 bytes)
     float odoVal = 0.0f;
     if (queryUDS3Bytes("7E0", "22 03", odoVal, 1.0f, 0.0f)) {
@@ -285,7 +312,7 @@ bool queryGroupB(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 2. Days to Service (7E0, DID 02 48, raw 2 bytes)
     float daysVal = 0.0f;
     if (queryUDS2Bytes("7E0", "02 48", daysVal, 1.0f, 0.0f)) {
@@ -293,7 +320,7 @@ bool queryGroupB(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     // 3. Km to Service (7E0, DID 02 47, raw 2 bytes)
     float kmVal = 0.0f;
     if (queryUDS2Bytes("7E0", "02 47", kmVal, 1.0f, 0.0f)) {
@@ -301,7 +328,7 @@ bool queryGroupB(TelemetryData& data) {
     } else {
         ok = false;
     }
-    
+
     return ok;
 }
 
@@ -312,9 +339,9 @@ void generateSimulatedTelemetry(TelemetryData& data, bool slowGroup) {
         data.temp = 18.0f;
         data.bat_cap = 61.5f;
         data.tp_alarm = 0.0f;
-        
+
         deriveRange(data);
-        data.power = -2100.0f; // Standard static/discharge placeholder
+        data.power = -2100.0f;
     } else {
         data.odo = 42150.0f;
         data.service_days = 180.0f;

@@ -2,35 +2,42 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "logger.h"
+#include "config.h"
+
+static bool bufferInitialized = false;
 
 void initBuffer() {
+    if (bufferInitialized) return; // Only initialize once
+
     if (!LittleFS.begin(true)) {
         Serial.println("Failed to mount LittleFS in Buffer!");
         return;
     }
-    
+
     // Create the queue directory if it doesn't exist
     if (!LittleFS.exists("/queue")) {
         if (LittleFS.mkdir("/queue")) {
-            logEvent("[INFO] Created /queue directory in LittleFS.");
+            logEvent("BUFFER", "Created /queue directory in LittleFS.");
         } else {
             Serial.println("Failed to create /queue directory!");
         }
     }
+
+    bufferInitialized = true;
 }
 
 bool enqueueData(const TelemetryData& data) {
-    initBuffer();
-    
+    if (!bufferInitialized) return false;
+
     // Construct a unique filename based on timestamp and millis to avoid collisions
     String filepath = "/queue/" + String(data.ts) + "_" + String(millis()) + ".json";
-    
+
     File f = LittleFS.open(filepath, "w");
     if (!f) {
-        logEvent("[ERROR] Failed to create queue file: " + filepath);
+        logEvent("ERROR", "Failed to create queue file: " + filepath);
         return false;
     }
-    
+
     // Use ArduinoJson to serialize the struct
     JsonDocument doc;
     doc["soc"] = data.soc;
@@ -45,27 +52,27 @@ bool enqueueData(const TelemetryData& data) {
     doc["tp_alarm"] = data.tp_alarm;
     doc["ts"] = data.ts;
     doc["src"] = data.src;
-    
+
     if (serializeJson(doc, f) == 0) {
-        logEvent("[ERROR] Failed to serialize JSON to " + filepath);
+        logEvent("ERROR", "Failed to serialize JSON to " + filepath);
         f.close();
         LittleFS.remove(filepath);
         return false;
     }
-    
+
     f.close();
-    logEvent("[BUFFER] Enqueued data to " + filepath);
+    logEvent("BUFFER", "Enqueued data to " + filepath);
     return true;
 }
 
 bool getNextQueuedFile(String& filepath, TelemetryData& data) {
-    initBuffer();
-    
+    if (!bufferInitialized) return false;
+
     File dir = LittleFS.open("/queue", "r");
     if (!dir || !dir.isDirectory()) {
         return false;
     }
-    
+
     File file = dir.openNextFile();
     while (file) {
         if (!file.isDirectory()) {
@@ -73,20 +80,20 @@ bool getNextQueuedFile(String& filepath, TelemetryData& data) {
             if (name.endsWith(".json")) {
                 // Ensure name has complete path
                 filepath = "/queue/" + name;
-                
+
                 // Read and deserialize the file
                 JsonDocument doc;
                 DeserializationError err = deserializeJson(doc, file);
                 file.close();
-                
+
                 if (err) {
-                    logEvent("[ERROR] Failed to parse JSON in file: " + filepath + " Error: " + err.c_str());
+                    logEvent("ERROR", "Failed to parse JSON in file: " + filepath + " Error: " + err.c_str());
                     // Delete corrupted file to avoid infinite loops
                     LittleFS.remove(filepath);
                     file = dir.openNextFile();
                     continue;
                 }
-                
+
                 // Populate data struct
                 data.soc = doc["soc"] | 0.0f;
                 data.volt = doc["volt"] | 0.0f;
@@ -99,15 +106,15 @@ bool getNextQueuedFile(String& filepath, TelemetryData& data) {
                 data.bat_cap = doc["bat_cap"] | 0.0f;
                 data.tp_alarm = doc["tp_alarm"] | 0.0f;
                 data.ts = doc["ts"] | 0U;
-                data.src = doc["src"] | "";
-                
+                strlcpy(data.src, doc["src"] | "", sizeof(data.src));
+
                 dir.close();
                 return true;
             }
         }
         file = dir.openNextFile();
     }
-    
+
     dir.close();
     return false;
 }
@@ -115,22 +122,22 @@ bool getNextQueuedFile(String& filepath, TelemetryData& data) {
 void removeQueuedFile(const String& filepath) {
     if (LittleFS.exists(filepath)) {
         if (LittleFS.remove(filepath)) {
-            logEvent("[BUFFER] Successfully removed " + filepath);
+            logEvent("BUFFER", "Successfully removed " + filepath);
         } else {
-            logEvent("[ERROR] Failed to remove " + filepath);
+            logEvent("ERROR", "Failed to remove " + filepath);
         }
     }
 }
 
 size_t getQueueSize() {
-    initBuffer();
+    if (!bufferInitialized) return 0;
+
     size_t count = 0;
-    
     File dir = LittleFS.open("/queue", "r");
     if (!dir || !dir.isDirectory()) {
         return 0;
     }
-    
+
     File file = dir.openNextFile();
     while (file) {
         if (!file.isDirectory()) {
@@ -141,19 +148,19 @@ size_t getQueueSize() {
         }
         file = dir.openNextFile();
     }
-    
+
     dir.close();
     return count;
 }
 
 void clearQueue() {
-    initBuffer();
-    
+    if (!bufferInitialized) return;
+
     File dir = LittleFS.open("/queue", "r");
     if (!dir || !dir.isDirectory()) {
         return;
     }
-    
+
     File file = dir.openNextFile();
     while (file) {
         if (!file.isDirectory()) {
@@ -165,7 +172,7 @@ void clearQueue() {
         }
         file = dir.openNextFile();
     }
-    
+
     dir.close();
-    logEvent("[BUFFER] Queue cleared.");
+    logEvent("BUFFER", "Queue cleared.");
 }

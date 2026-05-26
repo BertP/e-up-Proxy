@@ -16,7 +16,7 @@ struct TelemetryData {
     float bat_cap;
     float tp_alarm;
     uint32_t ts; // Unix timestamp
-    String src;
+    char src[16]; // Fixed-size source tag to avoid heap fragmentation
 };
 
 // Initialize the buffer queue system (e.g. check/create the /queue directory)
