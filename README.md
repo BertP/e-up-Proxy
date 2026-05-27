@@ -38,6 +38,28 @@ The firmware runs a robust, non-blocking asynchronous state machine with three m
 *   `include/config.h`: Local settings for SSIDs, MQTT host, timer thresholds, and NVS parameters.
 *   `include/version.h`: Central firmware version tracking.
 
+## Endpoints & Network Interfaces
+
+When the proxy is in the `CONNECTED_TO_HOME` state, it exposes the following network interfaces and endpoints:
+
+### 1. HTTP Web Server (Port 80)
+| Endpoint | Method | Response Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/debug` | `GET` | `text/plain` | Streams the active logs (`debug.log`) followed by any rotated backup logs (`debug.bak.log`) for real-time remote diagnostics. No authentication required. |
+
+### 2. Over-the-Air (OTA) Updates (Port 3232)
+*   **Protocol:** standard ESP32 `ArduinoOTA`
+*   **Hostname:** `eup-proxy` (resolves locally as `http://eup-proxy.local/` via mDNS)
+*   **Security:** Password-protected (`eup-proxy-ota`) to prevent unauthorized uploads.
+*   **Partitioning:** Seamless dual-partition swapping (dual 1.5MB slots via `partitions_ota.csv`).
+
+### 3. MQTT Telemetry Broker Interface (Port 1883)
+| Topic | Payload Format | Retained | Description |
+| :--- | :--- | :---: | :--- |
+| `eup/data` | JSON (Object) | `true` | Consolidated traction battery telemety (SoC, capacity, temperature, odometer, tire pressure, voltage, range, power). |
+| `eup/lastSync` | String (ISO-8601) | `true` | Transmission timestamp in local time (`Europe/Berlin` CET/CEST offset, e.g. `2026-05-27T07:50:06+02:00`). |
+| `homeassistant/sensor/eup_proxy_<sensor>/config` | JSON (Object) | `true` | Auto-Discovery configurations for Home Assistant dashboard integration (QoS 0). |
+
 ## Getting Started
 1.  Copy `include/config.example.h` to `include/config.h`.
 2.  Configure your WiFi networks (Wican SSID/pass and Home SSID/pass) and MQTT broker credentials in `include/config.h`.
