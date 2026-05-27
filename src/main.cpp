@@ -8,6 +8,7 @@
 #include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <time.h>
+#include <nvs_flash.h>
 
 #include "config.h"
 #include "logger.h"
@@ -743,6 +744,14 @@ void handleHome() {
 void setup() {
     Serial.begin(115200);
     delay(500);
+
+    // Initialize low-level NVS and recover if partition is corrupted or layout shifted (e.g. after changing partition tables)
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);

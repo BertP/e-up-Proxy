@@ -50,6 +50,7 @@ The proxy must implement a strict State Machine to handle network connectivity. 
 - **Hardware Watchdog (WDT):** A hardware watchdog is configured with a safety timeout margin of 30 seconds (`WDT_TIMEOUT_S 30`) to absorb network negotiation and diagnostic query delays without triggering unwanted resets.
 - **Asynchronous WiFi Connect:** To ensure the background WebServer remains responsive, WiFi connections are established using a non-blocking asynchronous state machine (`WIFI_IDLE`, `WIFI_CONNECTING`, `WIFI_CONNECTED`) with strict connection timeouts (10s for WiCAN, 15s for Home).
 - **Boot-Loop Protection:** An NVS crash counter is tracked in preference namespace `proxy` (key `bootcrash`). If the device fails to boot stably 5 consecutive times, a boot loop warning is logged. The counter is automatically zeroed once NTP time sync is confirmed on the Home network.
+- **NVS Partition Resilience & Auto-Format:** To prevent boot crashes caused by partition layout changes (such as shifting boundaries for `partitions_ota.csv`), NVS is initialized using the low-level ESP-IDF `nvs_flash_init()` handler. If a layout mismatch (`ESP_ERR_NVS_NEW_VERSION_FOUND`) or corruption (`ESP_ERR_NVS_NO_FREE_PAGES`) is detected, the NVS partition is automatically erased and re-formatted, allowing `Preferences` to initialize safely.
 
 ---
 
