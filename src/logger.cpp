@@ -147,9 +147,10 @@ void streamLog(WebServer& server) {
         if (f) {
             char buffer[256];
             while (f.available()) {
-                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer));
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
                 if (bytesRead > 0) {
-                    server.sendContent(buffer, bytesRead);
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
                 }
             }
             f.close();
@@ -162,14 +163,18 @@ void streamLog(WebServer& server) {
         if (f) {
             char buffer[256];
             while (f.available()) {
-                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer));
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
                 if (bytesRead > 0) {
-                    server.sendContent(buffer, bytesRead);
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
                 }
             }
             f.close();
         }
     }
+
+    // Cleanly terminate the chunked response
+    server.sendContent("");
 }
 
 void clearLog() {

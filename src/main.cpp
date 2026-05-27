@@ -84,6 +84,7 @@ void feedWDT();
 void beginWiFiConnect(const String& ssid, const String& pass, ProxyState target, unsigned long timeout);
 void checkWiFiConnect();
 void checkBootLoopProtection();
+void checkFirmwareUpdate();
 
 void transitionTo(ProxyState newState, const String& reason) {
     if (newState == currentState && stateMachineInitLogged) {
@@ -210,6 +211,17 @@ void checkBootLoopProtection() {
 void resetBootCrashCounter() {
     prefs.begin("proxy", false);
     prefs.putInt(BOOT_CRASH_NVS_KEY, 0);
+    prefs.end();
+}
+
+void checkFirmwareUpdate() {
+    prefs.begin("proxy", false);
+    String lastFw = prefs.getString("fw_version", "");
+    if (lastFw != FW_VERSION) {
+        clearLog();
+        logEvent("BOOT", "Firmware version changed from '" + lastFw + "' to '" + String(FW_VERSION) + "'. Log files cleared.");
+        prefs.putString("fw_version", FW_VERSION);
+    }
     prefs.end();
 }
 
@@ -752,6 +764,9 @@ void setup() {
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    // Check for firmware update and clear logs if updated
+    checkFirmwareUpdate();
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
