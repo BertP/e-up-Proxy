@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3-logging-opt (2026-05-29)
+- Removed redundant high-frequency telemetry logging from LittleFS to prevent log spam and flash wear
+- Added dedicated MQTT logging file `/mqtt.log` and registered `/mqtt` web endpoint to monitor broker activities
+- Implemented `otaInProgress` rescan lock to prevent Wi-Fi disconnection during active OTA flashes
+- Removed filesystem writes from ArduinoOTA callbacks to resolve flash SPI hardware cache exception crashes
+- Created `artifacts/wsl_build_guide.md` as permanent development and flashing reference
+
 ## 2.2-retro-sweep (2026-05-26)
 - Added OTA (Over-the-Air) update support with dual partition layout
 - Added boot-loop protection via NVS crash counter

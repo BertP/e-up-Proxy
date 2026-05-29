@@ -69,6 +69,7 @@ static bool stateMachineInitLogged = false;
 static bool lastScanFailed = false;
 static bool isWebServerStarted = false;
 static bool otaInitialized = false;
+static bool otaInProgress = false;
 
 // Function declarations
 void transitionTo(ProxyState newState, const String& reason = "");
@@ -149,13 +150,18 @@ void transitionTo(ProxyState newState, const String& reason) {
             ArduinoOTA.setPassword(OTA_PASSWORD);
 
             ArduinoOTA.onStart([]() {
-                logEvent("OTA", "Update starting...");
+                otaInProgress = true;
+                Serial.println("[OTA] Update starting...");
             });
             ArduinoOTA.onEnd([]() {
-                logEvent("OTA", "Update complete. Rebooting...");
+                Serial.println("[OTA] Update complete. Rebooting...");
+            });
+            ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+                feedWDT();
             });
             ArduinoOTA.onError([](ota_error_t error) {
-                logEvent("ERROR", "OTA failed, error: " + String(error));
+                otaInProgress = false;
+                Serial.printf("[ERROR] OTA failed, error: %d\n", error);
             });
 
             ArduinoOTA.begin();
@@ -528,7 +534,7 @@ void handleWican() {
 void publishHAAutoDiscovery() {
     if (!mqttClient.connected()) return;
 
-    logEvent("CONN", "Publishing Home Assistant Auto-Discovery sensors...");
+    logMqttEvent("CONN", "Publishing Home Assistant Auto-Discovery sensors...");
 
     struct SensorDef {
         const char* id;
@@ -601,12 +607,12 @@ void publishHAAutoDiscovery() {
         delay(20);
     }
 
-    logEvent("CONN", "Home Assistant Auto-Discovery published.");
+    logMqttEvent("CONN", "Home Assistant Auto-Discovery published.");
 }
 
 void flushQueueToMQTT() {
     if (!mqttClient.connected()) {
-        logEvent("MQTT", "Connecting to Broker " + String(MQTT_HOST) + "...");
+        logMqttEvent("MQTT", "Connecting to Broker " + String(MQTT_HOST) + "...");
 
         String clientID = "eupProxy_" + String(ESP.getEfuseMac(), HEX);
 
@@ -618,22 +624,22 @@ void flushQueueToMQTT() {
         }
 
         if (!connected) {
-            logEvent("ERROR", "MQTT connection failed, state: " + String(mqttClient.state()));
+            logMqttEvent("ERROR", "MQTT connection failed, state: " + String(mqttClient.state()));
             return;
         }
-        logEvent("MQTT", "Successfully connected to Broker.");
+        logMqttEvent("MQTT", "Successfully connected to Broker.");
 
         publishHAAutoDiscovery();
     }
 
     size_t queueSize = getQueueSize();
     if (queueSize == 0) {
-        logEvent("MQTT", "No buffered data to flush.");
+        logMqttEvent("MQTT", "No buffered data to flush.");
         mqttFlushDone = true;
         return;
     }
 
-    logEvent("MQTT", "Found " + String(queueSize) + " records to flush. Starting...");
+    logMqttEvent("MQTT", "Found " + String(queueSize) + " records to flush. Starting...");
 
     String filepath;
     TelemetryData data;
@@ -657,19 +663,19 @@ void flushQueueToMQTT() {
         String payload;
         serializeJson(doc, payload);
 
-        logEvent("MQTT", "Publishing to topic " + String(MQTT_TOPIC_DATA) + ": " + payload);
+        logMqttEvent("MQTT", "Publishing to topic " + String(MQTT_TOPIC_DATA) + ": " + payload);
         if (mqttClient.publish(MQTT_TOPIC_DATA, payload.c_str(), true)) {
             removeQueuedFile(filepath);
             flushCount++;
         } else {
-            logEvent("ERROR", "Failed to publish message to topic " + String(MQTT_TOPIC_DATA) + "!");
+            logMqttEvent("ERROR", "Failed to publish message to topic " + String(MQTT_TOPIC_DATA) + "!");
             break;
         }
 
         feedWDT();
     }
 
-    logEvent("MQTT", "Flush finished. Dispatched " + String(flushCount) + " messages.");
+    logMqttEvent("MQTT", "Flush finished. Dispatched " + String(flushCount) + " messages.");
 
     struct tm timeinfo;
     char timeBuf[64] = "2026-05-21T11:05:04+02:00";
@@ -685,7 +691,7 @@ void flushQueueToMQTT() {
         snprintf(timeBuf, sizeof(timeBuf), "%s%s", tBuf, tzStr.c_str());
     }
 
-    logEvent("MQTT", "Updating eup/lastSync: " + String(timeBuf));
+    logMqttEvent("MQTT", "Updating eup/lastSync: " + String(timeBuf));
     mqttClient.publish(MQTT_TOPIC_LASTSYNC, timeBuf, true);
 
     mqttFlushDone = true;
@@ -747,7 +753,7 @@ void handleHome() {
 
     unsigned long currentMillis = millis();
 
-    if (currentMillis - lastHomeRescanCheck >= HOME_RESCAN_INTERVAL_MS) {
+    if (!otaInProgress && currentMillis - lastHomeRescanCheck >= HOME_RESCAN_INTERVAL_MS) {
         logEvent("STATE", String(HOME_RESCAN_INTERVAL_MS / 60000) + "-minute home period elapsed. Checking if prioritized Wican is nearby...");
         transitionTo(STATE_SCANNING);
     }
@@ -786,6 +792,12 @@ void setup() {
     server.on("/debug", HTTP_GET, []() {
         logEvent("WEBSERVER", "GET /debug endpoint requested.");
         streamLog(server);
+    });
+
+    // Register dedicated /mqtt endpoint handler once
+    server.on("/mqtt", HTTP_GET, []() {
+        logMqttEvent("WEBSERVER", "GET /mqtt endpoint requested.");
+        streamMqttLog(server);
     });
 
     setupWDT();

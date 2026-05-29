@@ -142,12 +142,22 @@ Transition reasons to be logged:
   - No authentication required (local network only).
 
 ### Over-the-Air (OTA) Updates
+> Last changed: 2026-05-29 · Added critical flash write block, WDT feed safeguard, and WiFi scan lock during update
 
 - Active **only** when `CONNECTED_TO_HOME`.
 - **Protocol:** ArduinoOTA on standard port `3232`.
 - **Hostname:** `eup-proxy`
 - **Security:** Access is protected by the upload password `eup-proxy-ota`.
 - **Storage Layout:** Supports seamless switching between two 1.5MB application slots using the `partitions_ota.csv` partition layout.
+- **OTA Lock Prevention Specifications:**
+  1. **Zero Filesystem Activity during OTA:** 
+     - *Specification:* To avoid hardware conflicts on the SPI flash chip, no LittleFS file operations (neither reads nor writes, including `logEvent` calls) are permitted inside any `ArduinoOTA` callbacks (`onStart`, `onEnd`, `onError`).
+     - *Fallback:* All logging inside OTA callbacks must be printed exclusively to `Serial` (UART).
+  2. **Watchdog Keeping (WDT Feed):**
+     - *Specification:* During the firmware flashing process, the ESP32 must continue to feed the hardware watchdog timer (`WDT_TIMEOUT_S 30`) via the `ArduinoOTA.onProgress` callback to prevent automatic system resets.
+  3. **Network Rescan Lock:**
+     - *Specification:* The proxy must block all periodic network scanning and state transitions while an active OTA update is in progress to prevent Wi-Fi disconnection mid-upload.
+     - *Implementation:* Managed via an `otaInProgress` state flag that locks the Wi-Fi connection in place.
 
 ---
 

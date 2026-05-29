@@ -126,14 +126,121 @@ void logTelemetry(const TelemetryData& data) {
     char buf[128];
     snprintf(buf, sizeof(buf), "SoC=%.1f%% Temp=%.0f°C Cap=%.1fAh Volt=%.1fV TpAlarm=%.0f",
              data.soc, data.temp, data.bat_cap, data.volt, data.tp_alarm);
-    logEvent("DATA", buf);
+    // Only print to Serial for development diagnostics to avoid flash wear and log rotation
+    Serial.printf("%s [DATA] %s\n", getLogTimePrefix().c_str(), buf);
 }
 
 void logTelemetrySlow(const TelemetryData& data) {
     char buf[128];
     snprintf(buf, sizeof(buf), "Odo=%.0fkm SvcDays=%.0fd SvcKm=%.0fkm",
              data.odo, data.service_days, data.service_km);
-    logEvent("DATA:SLOW", buf);
+    // Only print to Serial for development diagnostics to avoid flash wear and log rotation
+    Serial.printf("%s [DATA:SLOW] %s\n", getLogTimePrefix().c_str(), buf);
+}
+
+static void checkMqttRotation() {
+    if (!LittleFS.exists("/mqtt.log")) {
+        return;
+    }
+    
+    File f = LittleFS.open("/mqtt.log", "r");
+    if (!f) {
+        return;
+    }
+    size_t size = f.size();
+    f.close();
+    
+    if (size >= MAX_LOG_SIZE) {
+        // Rotate files: remove old backup and rename current to backup
+        if (LittleFS.exists("/mqtt.bak.log")) {
+            LittleFS.remove("/mqtt.bak.log");
+        }
+        LittleFS.rename("/mqtt.log", "/mqtt.bak.log");
+        
+        // Create new mqtt.log and log rotation event
+        File newFile = LittleFS.open("/mqtt.log", "w");
+        if (newFile) {
+            String prefix = getLogTimePrefix();
+            newFile.printf("%s [INFO] MQTT log rotated due to size limits.\n", prefix.c_str());
+            newFile.close();
+        }
+    }
+}
+
+void logMqttEvent(const String& level, const String& message) {
+    checkMqttRotation();
+    
+    File f = LittleFS.open("/mqtt.log", "a");
+    if (f) {
+        String prefix = getLogTimePrefix();
+        String formattedMsg = message;
+        
+        if (!g_ntpSynchronized) {
+            if (message.indexOf("starting") < 0 && message.indexOf("[NO-NTP]") < 0 && message.indexOf("NTP synchronised") < 0) {
+                formattedMsg = "[NO-NTP] " + formattedMsg;
+            }
+        }
+        
+        f.printf("%s [%s] %s\n", prefix.c_str(), level.c_str(), formattedMsg.c_str());
+        f.close();
+        
+        // Also print to Serial for development diagnostics
+        Serial.printf("%s [%s] %s\n", prefix.c_str(), level.c_str(), formattedMsg.c_str());
+    }
+}
+
+void logMqttEvent(const String& message) {
+    if (message.startsWith("[")) {
+        int endBracket = message.indexOf(']');
+        if (endBracket > 0) {
+            String level = message.substring(1, endBracket);
+            String content = message.substring(endBracket + 1);
+            content.trim();
+            logMqttEvent(level, content);
+            return;
+        }
+    }
+    logMqttEvent("MQTT", message);
+}
+
+void streamMqttLog(WebServer& server) {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/plain", "");
+    
+    // 1. Stream the backup log first if it exists
+    if (LittleFS.exists("/mqtt.bak.log")) {
+        File f = LittleFS.open("/mqtt.bak.log", "r");
+        if (f) {
+            char buffer[256];
+            while (f.available()) {
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
+                if (bytesRead > 0) {
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
+                }
+            }
+            f.close();
+        }
+    }
+    
+    // 2. Stream the current log
+    if (LittleFS.exists("/mqtt.log")) {
+        File f = LittleFS.open("/mqtt.log", "r");
+        if (f) {
+            char buffer[256];
+            while (f.available()) {
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
+                if (bytesRead > 0) {
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
+                }
+            }
+            f.close();
+        }
+    }
+
+    // Cleanly terminate the chunked response
+    server.sendContent("");
 }
 
 
@@ -183,6 +290,12 @@ void clearLog() {
     }
     if (LittleFS.exists("/debug.bak.log")) {
         LittleFS.remove("/debug.bak.log");
+    }
+    if (LittleFS.exists("/mqtt.log")) {
+        LittleFS.remove("/mqtt.log");
+    }
+    if (LittleFS.exists("/mqtt.bak.log")) {
+        LittleFS.remove("/mqtt.bak.log");
     }
     initLogger();
 }

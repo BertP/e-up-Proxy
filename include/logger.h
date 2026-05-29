@@ -21,6 +21,13 @@ void logTelemetrySlow(const TelemetryData& data);
 // Stream the contents of debug.bak.log and debug.log to the WebServer client
 void streamLog(WebServer& server);
 
+// Log an MQTT-specific event string
+void logMqttEvent(const String& message);
+void logMqttEvent(const String& level, const String& message);
+
+// Stream the contents of mqtt.bak.log and mqtt.log to the WebServer client
+void streamMqttLog(WebServer& server);
+
 // Combine and write the 4 initial boot log lines in a single file open operation
 void logBootSequence(const String& mac, size_t freeKB, size_t queueSize);
 
