@@ -1,41 +1,43 @@
-# Walkthrough - Log Optimization & Dedicated /mqtt Endpoint
+# Walkthrough — Dynamische Gateway-IP-Auflösung (WiCAN OBD-Verbindung)
 
-We have successfully optimized the logging system of the `e-up!Proxy` to resolve log spam and introduced a dedicated MQTT diagnostic endpoint.
-
-## Changes Made
-
-### 1. Log Spam Reduction & Flash Protection
-- Removed high-frequency telemetry logs (`DATA` and `DATA:SLOW`) from being persistently written to the `/debug.log` on LittleFS.
-- Telemetry continues to be output to `Serial` for real-time USB diagnostics.
-- This prevents rapid log rotation (25KB limit) and protects the physical flash memory from unnecessary wear.
-
-### 2. Dedicated MQTT Logging & Endpoint `/mqtt`
-- Created a separate `/mqtt.log` and `/mqtt.bak.log` on LittleFS.
-- All MQTT connection events, auto-discovery publications, and packet dispatch actions are now routed to `/mqtt.log` via `logMqttEvent()`.
-- Registered the new HTTP endpoint `/mqtt` on the WebServer which streams these diagnostic logs.
-- Updated `clearLog()` to also purge the MQTT logs.
-
-### 3. OTA Stability Safeguards
-- Added an `otaInProgress` flag that blocks the 5-minute Wi-Fi rescan routine while an OTA update is running.
-- **Removed all LittleFS file writes (`logEvent`) from the `ArduinoOTA` callbacks** (`onStart`, `onEnd`, `onError`).
-  - *Why:* Accessing the filesystem (which sits on the same physical flash chip) during the precise moment the flash memory controller is locked for OTA writing triggers a severe hardware cache exception, causing the ESP32 to crash instantly.
-  - Replaced these calls with safe `Serial` outputs.
+Wir haben die OBD-Verbindung des `e-up!Proxy` erfolgreich dynamisiert. Anstelle einer hartcodierten IP-Adresse (`WICAN_IP`) wird nun die IP-Adresse des MeatPi WiCAN-Dongles direkt über den DHCP-Client des ESP32 ermittelt.
 
 ---
 
-## Flash Diagnostics & USB Action Required
+## 1. Durchgeführte Änderungen
 
-While compiling the firmware is fully successful (natively and for ESP32) and all native unit tests passed (`7/7 PASSED`), **the ESP32 must be flashed once via USB** to apply these updates.
+### 1.1. Dynamischer Verbindungsaufbau (`src/OBDManager.cpp`)
+- **Import erweitert**: `<WiFi.h>` eingebunden, um Zugriff auf die globale `WiFi`-Instanz zu erhalten.
+- **Gateway-IP auflösen**: In `connectOBD()` wird nun die Gateway-IP über `WiFi.gatewayIP()` abgefragt.
+- **TCP-Verbindung**: Die TCP-Verbindung via `obdClient.connect(gateway, WICAN_PORT)` nutzt nun direkt das dynamisch geladene `IPAddress`-Objekt.
+- **Erweitertes Logging**: Sowohl `connectOBD()` als auch `disconnectOBD()` protokollieren die exakte IP-Adresse, mit der sich der ESP32 verbindet bzw. von der er getrennt wird, im OBD-Log (`/obd.log`).
 
-### The OTA Lock Explained
-1. The currently running firmware on your ESP32 still contains the old OTA callbacks which attempt to write to LittleFS immediately when an OTA starts (`logEvent("OTA", "Update starting...")`).
-2. This triggers the hardware conflict, crashing the ESP32 instantly into a reboot.
-3. This is why the OTA upload succeeds in sending UDP packets (since `espota.py` blasts them without waiting for ACKs) but fails at the very end with `Error Uploading` (since the ESP32 has already crashed and rebooted).
+### 1.2. Erweiterung der Unit-Test-Mocks (`test/mocks/`)
+Damit die nativen Unit-Tests weiterhin problemlos kompilieren und durchlaufen, wurden die Mocks erweitert:
+- **`test/mocks/WiFi.h`**:
+  - Definition der Klasse `IPAddress` mit der Methode `toString()` (analog zur echten Arduino-Klasse).
+  - Hinzufügen der Methode `IPAddress gatewayIP()` in `MockWiFi`, die standardmäßig die Test-IP `"192.168.0.10"` zurückgibt.
+- **`test/mocks/WiFiClient.h`**:
+  - Hinzufügen der Signaturüberladung `bool connect(IPAddress ip, uint16_t port)` zur `WiFiClient`-Mockklasse.
 
-### Next Steps
-1. Connect the ESP32 via USB.
-2. Flash the newly built binary located in the workspace under `artifacts/firmware.bin` using PlatformIO's USB environment:
-   ```bash
-   pio run -t upload -e usb
-   ```
-3. Once this new version is flashed, **all future updates will work flawlessly via OTA**, as the flash-writing bugs and watchdog triggers have been completely eliminated!
+---
+
+## 2. Testergebnisse & Verifikation
+
+### 2.1. Native Unit-Tests (WSL2)
+Alle Tests liefen fehlerfrei durch:
+```text
+test/test_obd.cpp:122: test_whitespace_stripping	[PASSED]
+test/test_obd.cpp:123: test_derive_range_math	[PASSED]
+test/test_obd.cpp:124: test_uds_warm_range_derivation	[PASSED]
+test/test_obd.cpp:125: test_uds_cold_range_derivation	[PASSED]
+test/test_obd.cpp:126: test_uds_freezing_range_derivation	[PASSED]
+test/test_obd.cpp:127: test_uds_3_bytes_parsing	[PASSED]
+test/test_obd.cpp:128: test_nrc_error_handling	[PASSED]
+
+================== 7 test cases: 7 succeeded ==================
+```
+
+### 2.2. USB-Flash & Boot-Test
+- Die Firmware wurde erfolgreich via USB (`/dev/ttyACM0`) auf den ESP32 geflasht.
+- Der ESP32 bootet und wird sich beim Aufbau der Verbindung zum Access Point `WICAN_eUp` automatisch mit dem TCP-Server auf Port `35000` unter der IP-Adresse verbinden, die ihm der Dongle als Gateway zuweist (standardmäßig `192.168.0.10`).

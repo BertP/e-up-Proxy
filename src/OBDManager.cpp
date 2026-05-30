@@ -1,6 +1,7 @@
 #include "OBDManager.h"
 #include "config.h"
 #include "logger.h"
+#include <WiFi.h>
 #include <WiFiClient.h>
 
 static WiFiClient obdClient;
@@ -78,10 +79,11 @@ static bool setHeader(const String& header) {
 }
 
 bool connectOBD() {
-    logObdEvent("CONN", "Connecting to OBD TCP Gateway " + String(WICAN_IP) + ":" + String(WICAN_PORT) + "...");
+    IPAddress gateway = WiFi.gatewayIP();
+    logObdEvent("CONN", "Connecting to OBD TCP Gateway " + gateway.toString() + ":" + String(WICAN_PORT) + "...");
     obdClient.setTimeout(3); // 3 seconds timeout
 
-    if (!obdClient.connect(WICAN_IP, WICAN_PORT)) {
+    if (!obdClient.connect(gateway, WICAN_PORT)) {
         logObdEvent("ERROR", "OBD TCP connection failed!");
         return false;
     }
@@ -116,7 +118,8 @@ bool connectOBD() {
 
 void disconnectOBD() {
     if (obdClient.connected()) {
-        logObdEvent("CONN", "OBD session closed. TCP disconnected from " + String(WICAN_IP) + ":" + String(WICAN_PORT) + ".");
+        IPAddress gateway = WiFi.gatewayIP();
+        logObdEvent("CONN", "OBD session closed. TCP disconnected from " + gateway.toString() + ":" + String(WICAN_PORT) + ".");
         obdClient.stop();
     }
 }

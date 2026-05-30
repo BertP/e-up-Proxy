@@ -2,6 +2,7 @@
 #define MOCK_WIFICLIENT_H
 
 #include "Arduino.h"
+#include "WiFi.h"
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -25,6 +26,11 @@ public:
     }
 
     bool connect(const String& host, uint16_t port) {
+        mock_connected = true;
+        return true;
+    }
+
+    bool connect(IPAddress ip, uint16_t port) {
         mock_connected = true;
         return true;
     }

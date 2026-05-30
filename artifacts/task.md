@@ -1,19 +1,12 @@
-# Tasks — Dediziertes OBD-Logging & Session-Statistiken
+# Tasks — Dynamische Gateway-IP-Auflösung
 
-- [ ] Implementierung der neuen Log-Logik in `logger.h` und `logger.cpp`
-  - [ ] Deklaration/Definition von `logObdEvent`
-  - [ ] Eigene Log-Rotation für `/obd.log` und `/obd.bak.log` (25 KB)
-  - [ ] Erstellung der Live-Streaming-Logik `streamObdLog`
-  - [ ] Integration in `clearLog` zum Purgen
-- [ ] Integration der Session-Statistiken in `main.cpp`
-  - [ ] Globale Session-Zähler deklarieren
-  - [ ] Reset bei erfolgreichem `connectOBD()`
-  - [ ] Inkrementieren bei OBD-Abfragen (Gruppe A & B)
-  - [ ] Ausgabe der Session-Dauer und Zähler bei `disconnectOBD()`
-  - [ ] Registrieren des `/obd` Web-Endpoints zum Streamen
-- [ ] Code-Verifikation
-  - [ ] Clean Compile via WSL (`pio run -e esp32dev`)
-  - [ ] Native Unit-Tests ausführen (`pio test -e native`)
-- [ ] Deployment & Live-Test
-  - [ ] Flash via OTA (`pio run -t upload -e esp32dev`)
-  - [ ] Test des `/obd` Endpoints im Browser/per Curl
+- [x] Unit-Test-Mocks anpassen
+  - [x] `IPAddress` und `gatewayIP()` in `test/mocks/WiFi.h` implementieren
+  - [x] `connect(IPAddress, uint16_t)` Überladung in `test/mocks/WiFiClient.h` implementieren
+- [x] Dynamischen Verbindungsaufbau implementieren
+  - [x] `connectOBD()` in `src/OBDManager.cpp` auf `WiFi.gatewayIP()` umstellen
+  - [x] `disconnectOBD()` in `src/OBDManager.cpp` anpassen (Logging)
+- [x] Verifikation & Testen
+  - [x] Native Unit-Tests lokal ausführen und verifizieren (`pio test -e native`)
+  - [x] ESP32 Firmware bauen (`pio run -e usb`)
+  - [x] ESP32 flashen und serielles Log prüfen
