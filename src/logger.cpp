@@ -244,6 +244,110 @@ void streamMqttLog(WebServer& server) {
 }
 
 
+static void checkObdRotation() {
+    if (!LittleFS.exists("/obd.log")) {
+        return;
+    }
+    
+    File f = LittleFS.open("/obd.log", "r");
+    if (!f) {
+        return;
+    }
+    size_t size = f.size();
+    f.close();
+    
+    if (size >= MAX_LOG_SIZE) {
+        if (LittleFS.exists("/obd.bak.log")) {
+            LittleFS.remove("/obd.bak.log");
+        }
+        LittleFS.rename("/obd.log", "/obd.bak.log");
+        
+        File newFile = LittleFS.open("/obd.log", "w");
+        if (newFile) {
+            String prefix = getLogTimePrefix();
+            newFile.printf("%s [INFO] OBD log rotated due to size limits.\n", prefix.c_str());
+            newFile.close();
+        }
+    }
+}
+
+void logObdEvent(const String& level, const String& message) {
+    checkObdRotation();
+    
+    File f = LittleFS.open("/obd.log", "a");
+    if (f) {
+        String prefix = getLogTimePrefix();
+        String formattedMsg = message;
+        
+        if (!g_ntpSynchronized) {
+            if (message.indexOf("starting") < 0 && message.indexOf("[NO-NTP]") < 0 && message.indexOf("NTP synchronised") < 0) {
+                formattedMsg = "[NO-NTP] " + formattedMsg;
+            }
+        }
+        
+        f.printf("%s [%s] %s\n", prefix.c_str(), level.c_str(), formattedMsg.c_str());
+        f.close();
+        
+        // Also print to Serial for development diagnostics
+        Serial.printf("%s [%s] %s\n", prefix.c_str(), level.c_str(), formattedMsg.c_str());
+    }
+}
+
+void logObdEvent(const String& message) {
+    if (message.startsWith("[")) {
+        int endBracket = message.indexOf(']');
+        if (endBracket > 0) {
+            String level = message.substring(1, endBracket);
+            String content = message.substring(endBracket + 1);
+            content.trim();
+            logObdEvent(level, content);
+            return;
+        }
+    }
+    logObdEvent("OBD", message);
+}
+
+void streamObdLog(WebServer& server) {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/plain", "");
+    
+    // 1. Stream the backup log first if it exists
+    if (LittleFS.exists("/obd.bak.log")) {
+        File f = LittleFS.open("/obd.bak.log", "r");
+        if (f) {
+            char buffer[256];
+            while (f.available()) {
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
+                if (bytesRead > 0) {
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
+                }
+            }
+            f.close();
+        }
+    }
+    
+    // 2. Stream the current log
+    if (LittleFS.exists("/obd.log")) {
+        File f = LittleFS.open("/obd.log", "r");
+        if (f) {
+            char buffer[256];
+            while (f.available()) {
+                int bytesRead = f.read((uint8_t*)buffer, sizeof(buffer) - 1);
+                if (bytesRead > 0) {
+                    buffer[bytesRead] = '\0';
+                    server.sendContent(buffer);
+                }
+            }
+            f.close();
+        }
+    }
+
+    // Cleanly terminate the chunked response
+    server.sendContent("");
+}
+
+
 void streamLog(WebServer& server) {
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/plain", "");
@@ -296,6 +400,12 @@ void clearLog() {
     }
     if (LittleFS.exists("/mqtt.bak.log")) {
         LittleFS.remove("/mqtt.bak.log");
+    }
+    if (LittleFS.exists("/obd.log")) {
+        LittleFS.remove("/obd.log");
+    }
+    if (LittleFS.exists("/obd.bak.log")) {
+        LittleFS.remove("/obd.bak.log");
     }
     initLogger();
 }

@@ -28,6 +28,13 @@ void logMqttEvent(const String& level, const String& message);
 // Stream the contents of mqtt.bak.log and mqtt.log to the WebServer client
 void streamMqttLog(WebServer& server);
 
+// Log an OBD-specific connection/disconnection event string
+void logObdEvent(const String& message);
+void logObdEvent(const String& level, const String& message);
+
+// Stream the contents of obd.bak.log and obd.log to the WebServer client
+void streamObdLog(WebServer& server);
+
 // Combine and write the 4 initial boot log lines in a single file open operation
 void logBootSequence(const String& mac, size_t freeKB, size_t queueSize);
 

@@ -42,6 +42,11 @@ Preferences prefs;
 static TelemetryData latestCachedData;
 static bool obdActive = false;
 
+// OBD Session Stats Tracker
+static uint32_t obdSessionSuccessCount = 0;
+static uint32_t obdSessionFailCount = 0;
+static unsigned long obdSessionStartTime = 0;
+
 // Timing variables (non-blocking)
 static unsigned long lastStateChange = 0;
 static unsigned long lastLEDUpdate = 0;
@@ -102,6 +107,15 @@ void transitionTo(ProxyState newState, const String& reason) {
                 logEvent("SWITCH", "Reason: " + reason);
             }
 
+            // Log session stats upon disconnect
+            if (obdSessionStartTime > 0) {
+                unsigned long duration = (millis() - obdSessionStartTime) / 1000;
+                logObdEvent("DISCONN", "OBD session closed. Duration: " + String(duration) + "s. Successfully read datasets: " + String(obdSessionSuccessCount) + ". Failed queries: " + String(obdSessionFailCount) + ".");
+                obdSessionStartTime = 0;
+            } else {
+                logObdEvent("DISCONN", "OBD session closed (was not successfully established).");
+            }
+
             disconnectOBD();
             WiFi.disconnect(true);
         }
@@ -120,8 +134,21 @@ void transitionTo(ProxyState newState, const String& reason) {
         memset(&latestCachedData, 0, sizeof(latestCachedData));
         strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
 
+        // Reset session statistics trackers
+        obdSessionSuccessCount = 0;
+        obdSessionFailCount = 0;
+        obdSessionStartTime = millis();
+
+        logObdEvent("CONN", "Connecting to OBD Gateway. Resetting session counters.");
+
         // Attempt TCP OBD socket connection
         obdActive = connectOBD();
+        if (obdActive) {
+            logObdEvent("CONN", "Connected to OBD Gateway successfully.");
+        } else {
+            logObdEvent("ERROR", "Initial OBD connection failed!");
+            obdSessionFailCount++;
+        }
 
         // Immediate pre-flight read cycle
         fetchOBDMetrics(true);
@@ -463,9 +490,11 @@ void fetchOBDMetrics(bool forceSlow) {
             }
 
             enqueueData(latestCachedData);
+            obdSessionSuccessCount++;
             return;
         } else {
-            logEvent("ERROR", "UDS OBD queries failed. Disconnecting OBD for active retry.");
+            logObdEvent("ERROR", "UDS OBD queries failed. Disconnecting OBD for active retry.");
+            obdSessionFailCount++;
             disconnectOBD();
             obdActive = false;
         }
@@ -798,6 +827,12 @@ void setup() {
     server.on("/mqtt", HTTP_GET, []() {
         logMqttEvent("WEBSERVER", "GET /mqtt endpoint requested.");
         streamMqttLog(server);
+    });
+
+    // Register dedicated /obd endpoint handler once
+    server.on("/obd", HTTP_GET, []() {
+        logObdEvent("WEBSERVER", "GET /obd endpoint requested.");
+        streamObdLog(server);
     });
 
     setupWDT();

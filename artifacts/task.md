@@ -1,15 +1,19 @@
-- [x] Check connectivity to ESP32 (192.168.1.55)
-- [x] Implement new logging logic in `logger.h` and `logger.cpp`
-  - [x] Remove telemetry logs from writing to flash (only print to Serial)
-  - [x] Add `logMqttEvent` to write to `/mqtt.log` and `/mqtt.bak.log`
-  - [x] Add `streamMqttLog` to stream MQTT logs to the web client
-  - [x] Update `clearLog` to also purge MQTT logs
-- [x] Update `main.cpp`
-  - [x] Register new `/mqtt` endpoint on WebServer
-  - [x] Redirect all MQTT-related system logs to `logMqttEvent`
-  - [x] Add safeguard to feed WDT during OTA progress
-  - [x] Add safeguard to block Wi-Fi rescan checks during active OTA
-- [x] Compile and verify firmware build locally
-- [x] Verify native unit tests (`7/7 PASSED`)
-- [ ] Upload firmware via USB (OTA is locked on the device due to a bug in the currently running older firmware)
-- [ ] Verify endpoints `/debug` and `/mqtt` are working after USB flash
+# Tasks — Dediziertes OBD-Logging & Session-Statistiken
+
+- [ ] Implementierung der neuen Log-Logik in `logger.h` und `logger.cpp`
+  - [ ] Deklaration/Definition von `logObdEvent`
+  - [ ] Eigene Log-Rotation für `/obd.log` und `/obd.bak.log` (25 KB)
+  - [ ] Erstellung der Live-Streaming-Logik `streamObdLog`
+  - [ ] Integration in `clearLog` zum Purgen
+- [ ] Integration der Session-Statistiken in `main.cpp`
+  - [ ] Globale Session-Zähler deklarieren
+  - [ ] Reset bei erfolgreichem `connectOBD()`
+  - [ ] Inkrementieren bei OBD-Abfragen (Gruppe A & B)
+  - [ ] Ausgabe der Session-Dauer und Zähler bei `disconnectOBD()`
+  - [ ] Registrieren des `/obd` Web-Endpoints zum Streamen
+- [ ] Code-Verifikation
+  - [ ] Clean Compile via WSL (`pio run -e esp32dev`)
+  - [ ] Native Unit-Tests ausführen (`pio test -e native`)
+- [ ] Deployment & Live-Test
+  - [ ] Flash via OTA (`pio run -t upload -e esp32dev`)
+  - [ ] Test des `/obd` Endpoints im Browser/per Curl

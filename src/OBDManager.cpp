@@ -50,9 +50,9 @@ static String sendCommand(const String& cmd, unsigned int timeout = OBD_CMD_TIME
     response.trim();
 
     if (timedOut && response.length() == 0) {
-        logEvent("OBD-TIMEOUT", "No response for command: " + cmd + " (timeout: " + String(timeout) + "ms)");
+        logObdEvent("OBD-TIMEOUT", "No response for command: " + cmd + " (timeout: " + String(timeout) + "ms)");
     } else if (timedOut) {
-        logEvent("OBD-TIMEOUT", "Partial response for command: " + cmd + " -> \"" + response + "\" (timeout: " + String(timeout) + "ms)");
+        logObdEvent("OBD-TIMEOUT", "Partial response for command: " + cmd + " -> \"" + response + "\" (timeout: " + String(timeout) + "ms)");
     }
 
     return response;
@@ -64,7 +64,7 @@ static bool setHeader(const String& header) {
         return true;
     }
 
-    logEvent("CONN", "Switching CAN Header to " + header);
+    logObdEvent("CONN", "Switching CAN Header to " + header);
     String resp = sendCommand("AT SH " + header);
     String clean = stripWhitespace(resp);
 
@@ -73,40 +73,40 @@ static bool setHeader(const String& header) {
         return true;
     }
 
-    logEvent("ERROR", "Failed to switch header to " + header + " - Response: " + resp);
+    logObdEvent("ERROR", "Failed to switch header to " + header + " - Response: " + resp);
     return false;
 }
 
 bool connectOBD() {
-    logEvent("CONN", "Connecting to OBD TCP Gateway " + String(WICAN_IP) + ":" + String(WICAN_PORT) + "...");
+    logObdEvent("CONN", "Connecting to OBD TCP Gateway " + String(WICAN_IP) + ":" + String(WICAN_PORT) + "...");
     obdClient.setTimeout(3); // 3 seconds timeout
 
     if (!obdClient.connect(WICAN_IP, WICAN_PORT)) {
-        logEvent("ERROR", "OBD TCP connection failed!");
+        logObdEvent("ERROR", "OBD TCP connection failed!");
         return false;
     }
 
-    logEvent("CONN", "OBD TCP connected. Running ELM327 init sequence...");
+    logObdEvent("CONN", "OBD TCP connected. Running ELM327 init sequence...");
     currentHeader = ""; // Reset cached header
 
     // ELM327 Init Sequence
     const char* initCmds[] = { "AT E0", "AT L0", "AT H0", "AT SP 6", "AT AT 1", "AT ST FF" };
     for (const char* cmd : initCmds) {
         String resp = sendCommand(cmd);
-        logEvent("CONN", "ELM327 Init: " + String(cmd) + " -> " + resp);
+        logObdEvent("CONN", "ELM327 Init: " + String(cmd) + " -> " + resp);
     }
 
     // Open UDS Extended Diagnostic Session on ECU 7E5
     if (setHeader("7E5")) {
-        logEvent("CONN", "Opening UDS extended diagnostic session (10 03) on 7E5...");
+        logObdEvent("CONN", "Opening UDS extended diagnostic session (10 03) on 7E5...");
         String resp = sendCommand("10 03");
         String clean = stripWhitespace(resp);
         if (clean.indexOf("5003") >= 0) {
-            logEvent("CONN", "UDS extended session opened on 7E5.");
+            logObdEvent("CONN", "UDS extended session opened on 7E5.");
             lastTesterPresent = millis();
             return true;
         } else {
-            logEvent("ERROR", "Failed to open UDS extended session! Response: " + resp);
+            logObdEvent("ERROR", "Failed to open UDS extended session! Response: " + resp);
         }
     }
 
@@ -116,7 +116,7 @@ bool connectOBD() {
 
 void disconnectOBD() {
     if (obdClient.connected()) {
-        logEvent("CONN", "OBD session closed. TCP disconnected from " + String(WICAN_IP) + ":" + String(WICAN_PORT) + ".");
+        logObdEvent("CONN", "OBD session closed. TCP disconnected from " + String(WICAN_IP) + ":" + String(WICAN_PORT) + ".");
         obdClient.stop();
     }
 }
@@ -161,11 +161,11 @@ static bool queryUDS1Byte(const String& header, const String& did, float& outVal
 
     // Distinguish between NRC and empty response
     if (clean.length() == 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
     } else if (clean.indexOf("7F") >= 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
     } else {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
     }
     return false;
 }
@@ -188,11 +188,11 @@ static bool queryUDS2Bytes(const String& header, const String& did, float& outVa
     }
 
     if (clean.length() == 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
     } else if (clean.indexOf("7F") >= 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
     } else {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
     }
     return false;
 }
@@ -215,11 +215,11 @@ static bool queryUDS3Bytes(const String& header, const String& did, float& outVa
     }
 
     if (clean.length() == 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
     } else if (clean.indexOf("7F") >= 0) {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — NRC response: \"" + resp + "\"");
     } else {
-        logEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
+        logObdEvent("ERROR", "OBD query failed: DID " + did + " — unexpected response: \"" + resp + "\"");
     }
     return false;
 }
