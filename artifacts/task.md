@@ -1,12 +1,11 @@
-# Tasks — Dynamische Gateway-IP-Auflösung
+# Tasks — Uptime-Timestamps & Echte OBD-Boardspannung
 
-- [x] Unit-Test-Mocks anpassen
-  - [x] `IPAddress` und `gatewayIP()` in `test/mocks/WiFi.h` implementieren
-  - [x] `connect(IPAddress, uint16_t)` Überladung in `test/mocks/WiFiClient.h` implementieren
-- [x] Dynamischen Verbindungsaufbau implementieren
-  - [x] `connectOBD()` in `src/OBDManager.cpp` auf `WiFi.gatewayIP()` umstellen
-  - [x] `disconnectOBD()` in `src/OBDManager.cpp` anpassen (Logging)
-- [x] Verifikation & Testen
-  - [x] Native Unit-Tests lokal ausführen und verifizieren (`pio test -e native`)
-  - [x] ESP32 Firmware bauen (`pio run -e usb`)
-  - [x] ESP32 flashen und serielles Log prüfen
+- [/] Code-Implementierung
+  - [ ] `include/version.h` auf `2.3.3-uptime-real-volt` anheben
+  - [ ] Uptime-Formatierung `[Up HH:MM:SS]` in `src/logger.cpp` einbauen
+  - [ ] Spannungsabfrage und `getLatestRealVoltage()` in `src/OBDManager.cpp` integrieren
+  - [ ] `generateEmptyRealTelemetry()` mit `NAN`-Werten in `src/main.cpp` umsetzen
+- [ ] Verifikation & Testen
+  - [ ] Native Unit-Tests lokal ausführen (`pio test -e native`)
+  - [ ] ESP32 Firmware bauen & flashen (`pio run -e usb -t upload`)
+  - [ ] Logs & MQTT-Verbindung prüfen

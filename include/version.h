@@ -3,6 +3,6 @@
 
 // Single source of truth for firmware version.
 // This file is NOT gitignored - version is always tracked.
-#define FW_VERSION "2.3.2-gateway-ip"
+#define FW_VERSION "2.3.3-uptime-real-volt"
 
 #endif // VERSION_H

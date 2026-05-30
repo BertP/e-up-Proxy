@@ -471,6 +471,19 @@ void handleScanning() {
 }
 
 
+void generateEmptyRealTelemetry(TelemetryData& data) {
+    data.soc = NAN;
+    data.volt = getLatestRealVoltage();
+    data.temp = NAN;
+    data.range = NAN;
+    data.power = NAN;
+    data.bat_cap = NAN;
+    data.tp_alarm = NAN;
+    data.odo = NAN;
+    data.service_days = NAN;
+    data.service_km = NAN;
+}
+
 void fetchOBDMetrics(bool forceSlow) {
     if (obdActive) {
         bool groupAOk = queryGroupA(latestCachedData);
@@ -500,19 +513,13 @@ void fetchOBDMetrics(bool forceSlow) {
         }
     }
 
-    logEvent("WICAN", "Generating simulated telemetry payload...");
-    generateSimulatedTelemetry(latestCachedData, false);
-    if (forceSlow) {
-        generateSimulatedTelemetry(latestCachedData, true);
-    }
+    logObdEvent("CONN", "OBD is offline. Generating real board voltage empty payload...");
+    generateEmptyRealTelemetry(latestCachedData);
 
     latestCachedData.ts = time(nullptr);
     strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
 
     logTelemetry(latestCachedData);
-    if (forceSlow) {
-        logTelemetrySlow(latestCachedData);
-    }
 
     enqueueData(latestCachedData);
 }

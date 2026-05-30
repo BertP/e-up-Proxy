@@ -8,6 +8,20 @@
 
 bool g_ntpSynchronized = false;
 
+static String formatUptime() {
+    unsigned long ms = millis();
+    unsigned long secs = ms / 1000;
+    unsigned long mins = secs / 60;
+    unsigned long hours = mins / 60;
+    
+    secs = secs % 60;
+    mins = mins % 60;
+    
+    char upBuf[16];
+    snprintf(upBuf, sizeof(upBuf), "[Up %02lu:%02lu:%02lu]", hours, mins, secs);
+    return String(upBuf);
+}
+
 static String getLogTimePrefix() {
     if (g_ntpSynchronized) {
         struct tm timeinfo;
@@ -17,7 +31,7 @@ static String getLogTimePrefix() {
             return String(timeBuf);
         }
     }
-    return "[T+" + String(millis()) + "]";
+    return formatUptime();
 }
 
 static void checkRotation() {
@@ -59,7 +73,7 @@ void initLogger() {
     if (!LittleFS.exists("/debug.log")) {
         File f = LittleFS.open("/debug.log", "w");
         if (f) {
-            f.println("[T+0] [BOOT] Logger initialized successfully.");
+            f.println("[Up 00:00:00] [BOOT] Logger initialized successfully.");
             f.close();
         }
     }
@@ -69,19 +83,27 @@ void logBootSequence(const String& mac, size_t freeKB, size_t queueSize) {
     checkRotation();
     
     File f = LittleFS.open("/debug.log", "a");
+    unsigned long ms = millis();
+    unsigned long secs = ms / 1000;
+    unsigned long mins = secs / 60;
+    unsigned long hours = mins / 60;
+    secs = secs % 60;
+    mins = mins % 60;
+    char upBuf[32];
+    snprintf(upBuf, sizeof(upBuf), "[Up %02lu:%02lu:%02lu]", hours, mins, secs);
+
     if (f) {
-        unsigned long ms = millis();
-        f.printf("[T+%lu] [BOOT] e-up!Proxy starting. Firmware: %s\n", ms, FW_VERSION);
-        f.printf("[T+%lu] [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", ms, mac.c_str());
-        f.printf("[T+%lu] [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", ms, (unsigned int)freeKB);
-        f.printf("[T+%lu] [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", ms, (unsigned int)queueSize);
+        f.printf("%s [BOOT] e-up!Proxy starting. Firmware: %s\n", upBuf, FW_VERSION);
+        f.printf("%s [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", upBuf, mac.c_str());
+        f.printf("%s [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", upBuf, (unsigned int)freeKB);
+        f.printf("%s [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", upBuf, (unsigned int)queueSize);
         f.close();
         
         // Also print to Serial
-        Serial.printf("[T+%lu] [BOOT] e-up!Proxy starting. Firmware: %s\n", ms, FW_VERSION);
-        Serial.printf("[T+%lu] [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", ms, mac.c_str());
-        Serial.printf("[T+%lu] [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", ms, (unsigned int)freeKB);
-        Serial.printf("[T+%lu] [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", ms, (unsigned int)queueSize);
+        Serial.printf("%s [BOOT] e-up!Proxy starting. Firmware: %s\n", upBuf, FW_VERSION);
+        Serial.printf("%s [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", upBuf, mac.c_str());
+        Serial.printf("%s [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", upBuf, (unsigned int)freeKB);
+        Serial.printf("%s [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", upBuf, (unsigned int)queueSize);
     }
 }
 

@@ -7,6 +7,7 @@
 static WiFiClient obdClient;
 static String currentHeader = "";
 static unsigned long lastTesterPresent = 0;
+static float lastRealVoltage = 12.0f;
 
 static String stripWhitespace(const String& str) {
     String clean;
@@ -96,6 +97,17 @@ bool connectOBD() {
     for (const char* cmd : initCmds) {
         String resp = sendCommand(cmd);
         logObdEvent("CONN", "ELM327 Init: " + String(cmd) + " -> " + resp);
+    }
+
+    // Measure real board voltage directly from ELM327 (works even when CAN is offline)
+    String rvResp = sendCommand("AT RV");
+    String cleanRv = stripWhitespace(rvResp);
+    if (cleanRv.length() > 0) {
+        float voltVal = cleanRv.toFloat();
+        if (voltVal > 0.0f) {
+            lastRealVoltage = voltVal;
+            logObdEvent("CONN", "Real OBD board voltage read: " + String(voltVal) + "V");
+        }
     }
 
     // Open UDS Extended Diagnostic Session on ECU 7E5
@@ -276,6 +288,7 @@ bool queryGroupA(TelemetryData& data) {
         voltVal = cleanRv.toFloat();
         if (voltVal > 0.0f) {
             data.volt = voltVal;
+            lastRealVoltage = voltVal; // Update global cache
         } else {
             ok = false;
             logEvent("ERROR", "OBD query failed: voltage (AT RV) — raw response: \"" + rvResp + "\"");
@@ -350,4 +363,8 @@ void generateSimulatedTelemetry(TelemetryData& data, bool slowGroup) {
         data.service_days = 180.0f;
         data.service_km = 7500.0f;
     }
+}
+
+float getLatestRealVoltage() {
+    return lastRealVoltage;
 }

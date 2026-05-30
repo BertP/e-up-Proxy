@@ -22,4 +22,7 @@ bool queryGroupB(TelemetryData& data);
 // Run the full simulation fallback (in case Wican or OBD queries fail)
 void generateSimulatedTelemetry(TelemetryData& data, bool slowGroup);
 
+// Get the latest successfully read 12V board voltage (AT RV)
+float getLatestRealVoltage();
+
 #endif // OBD_MANAGER_H
