@@ -137,9 +137,12 @@ Transition reasons to be logged:
 ### Minimal WebServer
 
 - Active **only** when `CONNECTED_TO_HOME`.
-- Single endpoint: `GET /debug`
-  - Streams the full contents of `debug.log` as `text/plain`.
-  - No authentication required (local network only).
+- Endpoints:
+  - `GET /debug` — Streams the full contents of `debug.log` as `text/plain`.
+  - `GET /obd` — Streams OBD diagnostic session logs as `text/plain`.
+  - `GET /mqtt` — Streams MQTT broker connection and publication logs as `text/plain`.
+  - `GET /status` — Returns a comprehensive JSON object (`application/json`) representing system health metrics (uptime, heap, RSSI, MQTT and OBD statuses, queue size, and the latest OBD-queried metrics).
+- No authentication required (local network only).
 
 ### Over-the-Air (OTA) Updates
 > Last changed: 2026-05-29 · Added critical flash write block, WDT feed safeguard, and WiFi scan lock during update
@@ -419,3 +422,5 @@ To create the `e-up!Proxy` user with the required write permissions in Home Assi
 | 2026-05-21 | SPEC-05 | Initial version — full MQTT topic schema, HA discovery, timezone |
 | 2026-05-30 | SPEC-01, SPEC-02, SPEC-04 | Dynamic Gateway IP resolution, Uptime-Timestamp prefix, and board voltage (AT RV) fallback |
 | 2026-05-30 | SPEC-03 | Documented NAN/null placeholders for offline CAN sensors |
+| 2026-05-30 | SPEC-02 | Added specifications for /status, /obd, and /mqtt WebServer endpoints |
+

@@ -843,6 +843,33 @@ void setup() {
         streamObdLog(server);
     });
 
+    // Register health and metrics /status endpoint returning JSON
+    server.on("/status", HTTP_GET, []() {
+        logEvent("WEBSERVER", "GET /status endpoint requested.");
+        JsonDocument doc;
+        doc["uptime_s"] = millis() / 1000;
+        doc["state"] = stateNames[currentState];
+        doc["free_heap"] = ESP.getFreeHeap();
+        doc["wifi_rssi"] = WiFi.RSSI();
+        doc["wifi_ssid"] = WiFi.SSID();
+        doc["mqtt_connected"] = mqttClient.connected();
+        doc["mqtt_state"] = mqttClient.state();
+        doc["obd_active"] = obdActive;
+        doc["queue_size"] = getQueueSize();
+        doc["fw_version"] = FW_VERSION;
+
+        // Populate latest OBD values if available
+        JsonObject obd = doc["latest_obd"].to<JsonObject>();
+        obd["soc"] = isnan(latestCachedData.soc) ? JsonVariant() : latestCachedData.soc;
+        obd["volt"] = isnan(latestCachedData.volt) ? JsonVariant() : latestCachedData.volt;
+        obd["temp"] = isnan(latestCachedData.temp) ? JsonVariant() : latestCachedData.temp;
+        obd["bat_cap"] = isnan(latestCachedData.bat_cap) ? JsonVariant() : latestCachedData.bat_cap;
+
+        String response;
+        serializeJson(doc, response);
+        server.send(200, "application/json", response);
+    });
+
     setupWDT();
 
     transitionTo(STATE_SCANNING);

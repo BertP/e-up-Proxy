@@ -3,6 +3,6 @@
 
 // Single source of truth for firmware version.
 // This file is NOT gitignored - version is always tracked.
-#define FW_VERSION "2.3.3-uptime-real-volt"
+#define FW_VERSION "2.4.0-status-endpoint"
 
 #endif // VERSION_H

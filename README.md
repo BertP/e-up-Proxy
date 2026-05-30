@@ -51,6 +51,7 @@ When the proxy is in the `CONNECTED_TO_HOME` state, it exposes the following net
 | `/debug` | `GET` | `text/plain` | Streams the active logs (`debug.log`) followed by any rotated backup logs (`debug.bak.log`) for real-time remote diagnostics. |
 | `/obd` | `GET` | `text/plain` | Streams dedicated OBD connection logs and query statistics. |
 | `/mqtt` | `GET` | `text/plain` | Streams dedicated MQTT publication and broker connection logs. |
+| `/status` | `GET` | `application/json` | Returns system health metrics, Wi-Fi details, MQTT connection state, and the latest OBD query values as a JSON object. |
 
 ### 2. Over-the-Air (OTA) Updates (Port 3232)
 *   **Protocol:** standard ESP32 `ArduinoOTA`
