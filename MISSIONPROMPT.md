@@ -1,5 +1,10 @@
 # MISSIONPROMPT.md
 
+> [!IMPORTANT]
+> **DEVELOPMENT GUIDELINES & EMBEDDED ENGINEERING STANDARD:**
+> All work on this codebase MUST strictly follow the deterministic, non-trial-and-error engineering standard defined in [engineering_standard.md](file:///\\wsl.localhost\Ubuntu-22.04\home\bert\projects\e-up!Proxy\artifacts\engineering_standard.md).
+> Guessing or "trial & error" deployment is strictly prohibited. Always perform static flow dependency reviews and log-based verification first.
+
 ## Reference
 Product specification: See `SPEC.md` in the project root.
 
