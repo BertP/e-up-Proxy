@@ -800,16 +800,17 @@ void setup() {
     }
     ESP_ERROR_CHECK(err);
 
-    // Check for firmware update and clear logs if updated
-    checkFirmwareUpdate();
+    // Initialize WiFi mode early so MAC address registers correctly
+    WiFi.mode(WIFI_STA);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    // Initialize WiFi mode early so MAC address registers correctly
-    WiFi.mode(WIFI_STA);
-
     initLogger();
+
+    // Check for firmware update and clear logs if updated
+    checkFirmwareUpdate();
+
     initBuffer();
 
     logBootSequence(WiFi.macAddress(), 50, getQueueSize());
