@@ -140,12 +140,12 @@ private:
                 // SoC (7E5): 66.4% -> raw 166 (0xA6) -> 62 02 8C A6
                 response = "62 02 8C A6\r>";
             } 
-            else if (cmd == "22 11 62") {
-                // Battery Temp (7E5): raw = temp + 40
-                int raw_temp = (int)mock_temp + 40;
-                char hex[4];
-                snprintf(hex, sizeof(hex), "%02X", raw_temp & 0xFF);
-                response = "62 11 62 " + std::string(hex) + "\r>";
+            else if (cmd == "22 2A 0B") {
+                // Battery Temp (7E5): raw = temp * 64
+                int raw_temp = (int)(mock_temp * 64.0f);
+                char hex[8];
+                snprintf(hex, sizeof(hex), "%04X", raw_temp & 0xFFFF);
+                response = "62 2A 0B " + std::string(hex).substr(0, 2) + " " + std::string(hex).substr(2, 2) + "\r>";
             } 
             else if (cmd == "22 22 E1") {
                 // Battery Capacity (7E5): 61.2 Ah -> raw 612 (0x0264)

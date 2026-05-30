@@ -198,7 +198,8 @@ static bool queryUDS2Bytes(const String& header, const String& did, float& outVa
     if (prefixIndex >= 0 && clean.length() >= prefixIndex + expectedPrefix.length() + 4) {
         String hexBytes = clean.substring(prefixIndex + expectedPrefix.length(), prefixIndex + expectedPrefix.length() + 4);
         long rawVal = strtol(hexBytes.c_str(), NULL, 16);
-        outVal = (rawVal * scale) + offset;
+        int16_t signedVal = (int16_t)rawVal;
+        outVal = (signedVal * scale) + offset;
         return true;
     }
 
@@ -256,7 +257,7 @@ bool queryGroupA(TelemetryData& data) {
 
     bool ok = true;
 
-    // 1. SoC (7E5, DID 02 8C, raw * 0.4)
+    // 1. SoC (7E5, DID 02 8C, raw / 2.5 -> raw * 0.4)
     float socVal = 0.0f;
     if (queryUDS1Byte("7E5", "02 8C", socVal, 0.4f, 0.0f)) {
         data.soc = socVal;
@@ -264,9 +265,9 @@ bool queryGroupA(TelemetryData& data) {
         ok = false;
     }
 
-    // 2. Temp (7E5, DID 11 62, raw - 40)
+    // 2. Temp (7E5, DID 2A 0B, raw / 64 -> raw * 0.015625)
     float tempVal = 0.0f;
-    if (queryUDS1Byte("7E5", "11 62", tempVal, 1.0f, -40.0f)) {
+    if (queryUDS2Bytes("7E5", "2A 0B", tempVal, 0.015625f, 0.0f)) {
         data.temp = tempVal;
     } else {
         ok = false;
