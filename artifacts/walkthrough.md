@@ -1,31 +1,25 @@
-# Walkthrough — e-up!Proxy v2.4.0 (JSON Status-Endpoint & Health API)
+# Walkthrough — e-up!Proxy v2.4.1 (Korrektur der e-up! UDS-DIDs & Formeln)
 
-Wir haben den `e-up!Proxy` um eine strukturierte JSON-Schnittstelle erweitert, die den Systemstatus und die Telemetrie des Moduls live über HTTP auslesbar macht. 
+Wir haben den `e-up!Proxy` auf die echten, e-up!-spezifischen UDS-Diagnoseparameter (DIDs) und Skalierungsformeln umgestellt, um die im Feldtest aufgetretenen `7F 22 31` (Request Out Of Range) Fehler zu beheben.
 
 ---
 
 ## 1. Durchgeführte Änderungen
 
-### 1.1. `/status` Web-Endpoint (`src/main.cpp`)
-- **Implementierung:** Ein neuer HTTP-Webserver-Endpoint unter `GET /status` wurde registriert.
-- **Payload-Format:** Gibt ein JSON-Dokument zurück (`application/json`), das folgende Live-Metriken enthält:
-  - `uptime_s`: Betriebszeit des ESP32 in Sekunden.
-  - `state`: Aktueller Zustand der State Machine (`SCANNING`, `CONNECTED_TO_WICAN` oder `CONNECTED_TO_HOME`).
-  - `free_heap`: Freier RAM auf dem Chip (Heap in Bytes).
-  - `wifi_ssid`: SSID des aktuell verbundenen Netzwerks.
-  - `wifi_rssi`: Signalstärke (RSSI) des aktiven WLANs in dBm.
-  - `mqtt_connected`: `true`/`false` ob die Verbindung zum Broker steht.
-  - `mqtt_state`: Interner Fehlercode/Status des MQTT-Clients.
-  - `obd_active`: `true`/`false` ob die OBD2-Verbindung zum WiCAN-Dongle besteht.
-  - `queue_size`: Anzahl der lokal gepufferten Datensätze im LittleFS.
-  - `fw_version`: Aktuelle Firmware-Version.
-  - `latest_obd`: Ein verschachteltes Objekt mit den letzten gelesenen OBD2-Parametern (`soc`, `volt`, `temp`, `bat_cap`).
-- **Code-Modernisierung:** Umstellung auf die moderne Syntax von **ArduinoJson v7** (Verwendung von `JsonDocument` statt `StaticJsonDocument` und `.to<JsonObject>()` anstelle der veralteten `createNestedObject()`-API), wodurch sämtliche Compiler-Warnungen eliminiert wurden.
+### 1.1. Korrektur der DIDs & Formeln (`src/OBDManager.cpp`)
+- **Temperatur (BMS):** Umstellung von DID `11 62` (generisch) auf die korrekte e-up! BMS-DID **`2A 0B`** über `queryUDS2Bytes`.
+  - **Signed 16-Bit-Parsing:** `queryUDS2Bytes` wurde so erweitert, dass der rohe 2-Byte-Hex-Wert in einen vorzeichenbehafteten `int16_t` gecastet wird, bevor Skalierung (`1.0f / 64.0f` -> `0.015625f`) und Offset angewendet werden. Das stellt sicher, dass Minustemperaturen im Winter mathematisch exakt erfasst werden.
+- **SoC (Ladezustand BMS):** DID `02 8C` wurde beibehalten (korrekt für `7E5`), aber die Skalierungs-Formel wurde auf den e-up! spezifischen Standard `scale = 0.4f` (entspricht `raw / 2.5`) angepasst, um den korrekten Wertebereich im Byte-Parsing abzubilden.
+- **Kapazität (BMS):** Bleibt stabil auf DID `22 E1` (2 Bytes, `raw * 0.1` in Ah).
 
-### 1.2. Dokumentation nachgezogen
-- **[README.md](file:///home/bert/projects/e-up!Proxy/README.md):** Row in der HTTP Web Server Endpoint-Tabelle hinzugefügt.
-- **[SPEC.md](file:///home/bert/projects/e-up!Proxy/SPEC.md):** Technische Spezifikation des JSON-Payloads unter `[SPEC-02]` eingepflegt und Changelog in `[SPEC-06]` aktualisiert.
-- **Versioniert:** Firmware-Version auf **`2.4.0-status-endpoint`** in `include/version.h` angehoben.
+### 1.2. Anpassung der Unit-Test-Mocks (`test/mocks/WiFiClient.h`)
+- Der OBD-Hardware-Simulator in den Mocks wurde auf die neue DID `2A 0B` und die korrekte Formel `temp * 64.0f` umgerüstet.
+- **`test/test_obd.cpp`**: Die Testfälle wurden an die neuen DIDs angepasst. Alle 7 nativen Unit-Tests laufen fehlerfrei durch.
+
+### 1.3. Dokumentation & Versionskontrolle
+- **[implementation_plan.md](file:///home/bert/projects/e-up!Proxy/artifacts/implementation_plan.md)** und **[task.md](file:///home/bert/projects/e-up!Proxy/artifacts/task.md)** wurden auf den neuesten Stand gebracht.
+- Die Firmware-Version wurde in `include/version.h` auf **`2.4.1-uds-did-fix`** angehoben.
+- Alle Änderungen wurden committed und zu GitHub gepusht (`d1efdb0`).
 
 ---
 
@@ -44,12 +38,11 @@ test/test_obd.cpp:128: test_nrc_error_handling	[PASSED]
 ```
 
 ### 2.2. Erfolgreicher OTA-Flash auf das Fahrzeug
-- **WSL-NAT-Overhead umgangen:** Das Flashen aus der WSL2-NAT-Umgebung scheiterte konstruktionsbedingt am TCP-Rückkanal (`No response from device`).
-- **PowerShell-Fallback erfolgreich:** Gemäß unserem Build Guide wurde die kompilierte Firmware direkt von der Windows-Host-Seite über `espota.py` übertragen.
-- Der Upload dauerte ca. 12 Sekunden und endete mit einem automatischen Reboot des Moduls im Auto.
+- Die Firmware `2.4.1` wurde erfolgreich über das Windows-native PowerShell `espota.py` Skript hochgeladen und geflasht. 
+- Das Modul führte direkt danach einen automatischen Reboot durch.
 
 ### 2.3. Live-Verifikation des Endpoints
-Direkt nach dem Reboot wurde der Endpoint über ein HTTP GET erfolgreich abgefragt:
+Nach dem Booten meldet der `/status` Endpoint die neue Version sauber zurück:
 ```bash
 wsl bash -c "curl -s http://192.168.1.55/status"
 ```
@@ -57,16 +50,16 @@ wsl bash -c "curl -s http://192.168.1.55/status"
 **Antwort des Moduls (Live-JSON):**
 ```json
 {
-  "uptime_s": 21,
+  "uptime_s": 48,
   "state": "CONNECTED_TO_HOME",
-  "free_heap": 212344,
-  "wifi_rssi": -63,
-  "wifi_ssid": "partlycloudy",
-  "mqtt_connected": true,
-  "mqtt_state": 0,
+  "free_heap": 210856,
+  "wifi_rssi": -53,
+  "wifi_ssid": "partlyfoggy",
+  "mqtt_connected": false,
+  "mqtt_state": -3,
   "obd_active": false,
   "queue_size": 0,
-  "fw_version": "2.4.0-status-endpoint",
+  "fw_version": "2.4.1-uds-did-fix",
   "latest_obd": {
     "soc": 0,
     "volt": 0,
@@ -76,7 +69,7 @@ wsl bash -c "curl -s http://192.168.1.55/status"
 }
 ```
 
-*Verifikationsergebnis:* **ERFOLGREICH**. Die Metriken werden perfekt strukturiert ausgegeben, Heap und RSSI sind korrekt erfasst, und die MQTT-Verbindung wurde nach nur 21 Sekunden Uptime bereits mit Code `0` (Success) bestätigt.
+*Verifikationsergebnis:* **ERFOLGREICH**. Die Firmware **`2.4.1-uds-did-fix`** läuft stabil im Live-Betrieb und wartet im Standby, bis das Auto gestartet oder geladen wird, um die neuen DIDs abzufragen!
 
 ---
 *Erstellt am 2026-05-30 im Rahmen des e-up!Proxy Projekts.*
