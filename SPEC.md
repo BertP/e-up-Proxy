@@ -70,15 +70,15 @@ All entries use a consistent prefix for easy filtering:
 [hh:mm:ss] [<LEVEL>] <message>
 ```
 
-- `hh:mm:ss` — local wall-clock time (`Europe/Berlin`), used **after** NTP synchronisation is confirmed. Before NTP sync, fall back to `[T+<ms>]` (milliseconds since boot) and prefix the entry with `[NO-NTP]`.
+- `hh:mm:ss` — local wall-clock time (`Europe/Berlin`), used **after** NTP synchronisation is confirmed. Before NTP sync, fall back to `[Up HH:MM:SS]` (uptime since boot) and prefix the entry with `[NO-NTP]`.
 - `<LEVEL>` — one of `BOOT`, `SCAN`, `CONN`, `SWITCH`, `DATA`, `ERROR`.
 
 #### Example entries before and after NTP sync
 
 ```
-[T+0]      [BOOT] e-up!Proxy starting. Firmware: <version>
-[T+312]    [BOOT] [NO-NTP] LittleFS mounted. Free: 38 KB / 50 KB cap
-[T+4821]   [BOOT] NTP synchronised. Local time: 17:35:02 (Europe/Berlin, CEST +02:00)
+[Up 00:00:00] [BOOT] e-up!Proxy starting. Firmware: <version>
+[Up 00:00:00] [BOOT] [NO-NTP] LittleFS mounted. Free: 38 KB / 50 KB cap
+[Up 00:00:04] [BOOT] NTP synchronised. Local time: 17:35:02 (Europe/Berlin, CEST +02:00)
 [17:35:02] [BOOT] State machine initialised. Entering SCANNING.
 [17:35:04] [SCAN] Found 3 networks:
 [17:35:04] [SCAN]   SSID: "WicanAP"     RSSI: -58 dBm  CH: 6
@@ -86,14 +86,14 @@ All entries use a consistent prefix for easy filtering:
 
 ### Boot Log (on every startup)
 
-Logged once during `setup()`. Before NTP sync the `[T+<ms>]` prefix is used; after sync all subsequent entries use `hh:mm:ss`:
+Logged once during `setup()`. Before NTP sync the `[Up HH:MM:SS]` prefix is used; after sync all subsequent entries use `hh:mm:ss`:
 
 ```
-[T+0]      [BOOT] e-up!Proxy starting. Firmware: <version>
-[T+12]     [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: AA:BB:CC:DD:EE:FF
-[T+24]     [BOOT] [NO-NTP] LittleFS mounted. Free: <n> KB / 50 KB cap
-[T+30]     [BOOT] [NO-NTP] Buffered payloads in queue: <n>
-[T+4821]   [BOOT] NTP synchronised. Local time: 17:35:02 (Europe/Berlin, CEST +02:00)
+[Up 00:00:00] [BOOT] e-up!Proxy starting. Firmware: <version>
+[Up 00:00:00] [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: AA:BB:CC:DD:EE:FF
+[Up 00:00:00] [BOOT] [NO-NTP] LittleFS mounted. Free: <n> KB / 50 KB cap
+[Up 00:00:00] [BOOT] [NO-NTP] Buffered payloads in queue: <n>
+[Up 00:00:04] [BOOT] NTP synchronised. Local time: 17:35:02 (Europe/Berlin, CEST +02:00)
 [17:35:02] [BOOT] State machine initialised. Entering SCANNING.
 ```
 
@@ -200,7 +200,7 @@ The buffered payload mirrors the `eup/data` MQTT schema (see [SPEC-05]):
 ## [SPEC-04] OBD2 Metrics — DID Mapping (Wican / STN2120)
 > Last changed: 2026-05-21 · Extracted from OBDManager.h; slow-poll group (10 min) added; power/range TBD
 
-Source: `OBDManager.h`. The Wican Dongle is accessed via TCP on `192.168.4.1:35000`.
+Source: `OBDManager.h`. The Wican Dongle is accessed via TCP on the dynamic Gateway IP (resolved via `WiFi.gatewayIP()`) on Port `35000`.
 A UDS Extended Diagnostic Session (`10 03`) is opened once per connection on ECU `7E5` and kept alive with `3E 80` (Tester Present, suppress response).
 
 ### ECU Overview
@@ -268,7 +268,7 @@ Each completed read cycle produces a single `[DATA]` log line — concise, not t
 **On session open / close:**
 ```
 [17:42:15] [CONN] UDS extended session opened on 7E5.
-[17:58:22] [CONN] OBD session closed. TCP disconnected from 192.168.4.1:35000.
+[17:58:22] [CONN] OBD session closed. TCP disconnected from <Gateway IP>:35000.
 ```
 
 ---
@@ -417,3 +417,5 @@ To create the `e-up!Proxy` user with the required write permissions in Home Assi
 | 2026-05-21 | SPEC-03 | Initial version — FIFO buffer, payload aligned to eup/data schema |
 | 2026-05-21 | SPEC-04 | Initial version — DID mapping from OBDManager.h, slow-poll group |
 | 2026-05-21 | SPEC-05 | Initial version — full MQTT topic schema, HA discovery, timezone |
+| 2026-05-30 | SPEC-01, SPEC-02, SPEC-04 | Dynamic Gateway IP resolution, Uptime-Timestamp prefix, and board voltage (AT RV) fallback |
+| 2026-05-30 | SPEC-03 | Documented NAN/null placeholders for offline CAN sensors |
