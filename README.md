@@ -6,7 +6,8 @@ This firmware communicates with a **WiCAN meatPi OBD2 Dongle** over TCP/WiFi, po
 
 ## Hardware Architecture
 *   **Microcontroller:** ESP32-WROOM-32
-*   **OBD2 Interface:** WiCAN OBD2 Dongle (meatPi) configured in TCP server mode (`192.168.4.1:35000`)
+*   **OBD2 Interface:** WiCAN OBD2 Dongle (meatPi) configured in TCP server mode (Port `35000`).
+    *   *Dynamic DHCP IP resolution:* The Proxy automatically resolves the gateway IP of the WiCAN access point (`WiFi.gatewayIP()`) at startup. No hardcoded subnet configuration required!
 *   **Status Indicator:** Single onboard LED (GPIO 2) showing active device states.
 
 ## Firmware State Machine
@@ -21,13 +22,14 @@ The firmware runs a robust, non-blocking asynchronous state machine with three m
     *   Polls high-frequency metrics (SoC, temperature, capacity, voltage, tire pressure) every 60 seconds (Group A).
     *   Polls low-frequency metrics (Odometer, service intervals) every 10 minutes (Group B).
     *   Enqueues telematics in a local JSON-based FIFO queue on LittleFS (resists data loss when offline/driving).
+    *   **Standby/CAN-Offline Fallback:** If the CAN bus is offline (ignition off) but the WiCAN TCP server is accessible on your workbench or in the car, the Proxy automatically queries the real board voltage (`AT RV`) but sets all fahrzeug-specific CAN sensors to `NAN` (serialized as `null` in JSON), letting Home Assistant know they are currently unavailable.
     *   LED pattern: Alternating short double-flashes.
 3.  **`CONNECTED_TO_HOME`**
     *   Connects to your home WiFi.
     *   Synchronizes system time via NTP with the Europe/Berlin timezone.
     *   Flushes all buffered data packets from the local LittleFS queue to the MQTT broker.
     *   Publishes Home Assistant Auto-Discovery payloads for seamless dashboard integration of all 10 diagnostic sensors.
-    *   Starts a minimal debugging WebServer at the `/debug` endpoint to stream live logs.
+    *   Starts a minimal debugging WebServer to stream live logs.
     *   Enables **ArduinoOTA** (Over-the-Air) firmware updates.
     *   Periodically rescans for Wican after 5 minutes to switch back to logging mode.
     *   LED pattern: Solid ON.
@@ -35,6 +37,7 @@ The firmware runs a robust, non-blocking asynchronous state machine with three m
 ## Project Files
 *   [SPEC.md](file:///home/bert/projects/e-up!Proxy/SPEC.md): Technical protocol specifications, LED patterns, and Home Assistant MQTT topics.
 *   [MISSIONPROMPT.md](file:///home/bert/projects/e-up!Proxy/MISSIONPROMPT.md): Original functional requirements and initial design constraints.
+*   [engineering_standard.md](file:///home/bert/projects/e-up!Proxy/artifacts/engineering_standard.md): Deterministic embedded development guidelines and initial setup initialization rules.
 *   `include/config.h`: Local settings for SSIDs, MQTT host, timer thresholds, and NVS parameters.
 *   `include/version.h`: Central firmware version tracking.
 
@@ -45,7 +48,9 @@ When the proxy is in the `CONNECTED_TO_HOME` state, it exposes the following net
 ### 1. HTTP Web Server (Port 80)
 | Endpoint | Method | Response Type | Description |
 | :--- | :--- | :--- | :--- |
-| `/debug` | `GET` | `text/plain` | Streams the active logs (`debug.log`) followed by any rotated backup logs (`debug.bak.log`) for real-time remote diagnostics. No authentication required. |
+| `/debug` | `GET` | `text/plain` | Streams the active logs (`debug.log`) followed by any rotated backup logs (`debug.bak.log`) for real-time remote diagnostics. |
+| `/obd` | `GET` | `text/plain` | Streams dedicated OBD connection logs and query statistics. |
+| `/mqtt` | `GET` | `text/plain` | Streams dedicated MQTT publication and broker connection logs. |
 
 ### 2. Over-the-Air (OTA) Updates (Port 3232)
 *   **Protocol:** standard ESP32 `ArduinoOTA`
