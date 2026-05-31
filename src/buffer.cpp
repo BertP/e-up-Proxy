@@ -4,6 +4,8 @@
 #include "logger.h"
 #include "config.h"
 
+extern void feedWDT(); // Access global hardware Watchdog feeder
+
 static bool bufferInitialized = false;
 
 void initBuffer() {
@@ -75,6 +77,8 @@ bool getNextQueuedFile(String& filepath, TelemetryData& data) {
 
     File file = dir.openNextFile();
     while (file) {
+        feedWDT(); // Feed watchdog during file search
+        yield();   // Yield CPU to let system background tasks run
         if (!file.isDirectory()) {
             String name = file.name();
             if (name.endsWith(".json")) {
@@ -140,6 +144,8 @@ size_t getQueueSize() {
 
     File file = dir.openNextFile();
     while (file) {
+        feedWDT(); // Feed watchdog during queue size counting
+        yield();   // Yield CPU
         if (!file.isDirectory()) {
             String name = file.name();
             if (name.endsWith(".json")) {
@@ -163,6 +169,8 @@ void clearQueue() {
 
     File file = dir.openNextFile();
     while (file) {
+        feedWDT(); // Feed watchdog during queue clearing
+        yield();   // Yield CPU
         if (!file.isDirectory()) {
             String filepath = "/queue/" + String(file.name());
             file.close();
