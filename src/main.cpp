@@ -9,6 +9,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <nvs_flash.h>
+#include <LittleFS.h>
 
 #include "config.h"
 #include "logger.h"
@@ -842,6 +843,36 @@ void setup() {
     server.on("/obd", HTTP_GET, []() {
         logObdEvent("WEBSERVER", "GET /obd endpoint requested.");
         streamObdLog(server);
+    });
+
+    // Register active REST API /files endpoint returning JSON listing of buffered files
+    server.on("/files", HTTP_GET, []() {
+        logEvent("WEBSERVER", "GET /files endpoint requested.");
+        JsonDocument doc;
+        JsonArray arr = doc["files"].to<JsonArray>();
+        File dir = LittleFS.open("/queue", "r");
+        if (dir && dir.isDirectory()) {
+            File file = dir.openNextFile();
+            while (file) {
+                if (!file.isDirectory()) {
+                    JsonObject f = arr.add<JsonObject>();
+                    f["name"] = String(file.name());
+                    f["size"] = file.size();
+                }
+                file = dir.openNextFile();
+            }
+            dir.close();
+        }
+        String response;
+        serializeJson(doc, response);
+        server.send(200, "application/json", response);
+    });
+
+    // Register active REST API /clear endpoint to manually clear the queue via POST
+    server.on("/clear", HTTP_POST, []() {
+        logEvent("WEBSERVER", "POST /clear endpoint requested.");
+        clearQueue();
+        server.send(200, "text/plain", "Queue cleared successfully");
     });
 
     // Register health and metrics /status endpoint returning JSON

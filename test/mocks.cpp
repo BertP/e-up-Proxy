@@ -14,3 +14,7 @@ bool WiFiClient::mock_connected = false;
 std::string WiFiClient::current_cmd = "";
 bool WiFiClient::mock_nrc_mode = false;
 float WiFiClient::mock_temp = 20.0f;
+
+void feedWDT() {
+    // Mock WDT feed - do nothing on host native tests
+}
