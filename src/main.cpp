@@ -709,6 +709,7 @@ void flushQueueToMQTT() {
         }
 
         feedWDT();
+        delay(5); // Verschnaufpause für den WiFi- und Netzwerk-Stack
     }
 
     logMqttEvent("MQTT", "Flush finished. Dispatched " + String(flushCount) + " messages.");
@@ -864,6 +865,7 @@ void setup() {
         obd["volt"] = isnan(latestCachedData.volt) ? JsonVariant() : latestCachedData.volt;
         obd["temp"] = isnan(latestCachedData.temp) ? JsonVariant() : latestCachedData.temp;
         obd["bat_cap"] = isnan(latestCachedData.bat_cap) ? JsonVariant() : latestCachedData.bat_cap;
+        obd["odo"] = isnan(latestCachedData.odo) ? JsonVariant() : latestCachedData.odo;
 
         String response;
         serializeJson(doc, response);

@@ -145,7 +145,7 @@ Transition reasons to be logged:
   - `GET /debug` — Streams the full contents of `debug.log` as `text/plain`.
   - `GET /obd` — Streams OBD diagnostic session logs as `text/plain`.
   - `GET /mqtt` — Streams MQTT broker connection and publication logs as `text/plain`.
-  - `GET /status` — Returns a comprehensive JSON object (`application/json`) representing system health metrics (uptime, heap, RSSI, MQTT and OBD statuses, queue size, and the latest OBD-queried metrics).
+  - `GET /status` — Returns a comprehensive JSON object (`application/json`) representing system health metrics (uptime, heap, RSSI, MQTT and OBD statuses, queue size, and the latest OBD-queried metrics including SoC, voltage, temperature, capacity, and odometer).
 - No authentication required (local network only).
 
 ### Over-the-Air (OTA) Updates
@@ -428,4 +428,5 @@ To create the `e-up!Proxy` user with the required write permissions in Home Assi
 | 2026-05-30 | SPEC-03 | Documented NAN/null placeholders for offline CAN sensors |
 | 2026-05-30 | SPEC-02 | Added specifications for /status, /obd, and /mqtt WebServer endpoints |
 | 2026-05-31 | SPEC-01, SPEC-04, SPEC-06 | Updated Fast poll interval to 150s, integrated e-up!-specific BMS DID `2A 0B` for temperature with signed int16 parsing, added "Dongle First" exklusiv state rule, and target firmware version `2.4.2-dongle-first` metadata |
+| 2026-05-31 | SPEC-02, SPEC-06 | Added Odometer (odo) to /status JSON diagnostics payload |
 
