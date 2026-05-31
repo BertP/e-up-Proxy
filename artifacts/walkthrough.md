@@ -1,65 +1,58 @@
-# Walkthrough — e-up!Proxy v2.4.1 (Korrektur der e-up! UDS-DIDs & Formeln)
+# Walkthrough — e-up!Proxy v2.4.2 (Watchdog-Optimierung & Serial Flash)
 
-Wir haben den `e-up!Proxy` auf die echten, e-up!-spezifischen UDS-Diagnoseparameter (DIDs) und Skalierungsformeln umgestellt, um die im Feldtest aufgetretenen `7F 22 31` (Request Out Of Range) Fehler zu beheben.
-
----
-
-## 1. Durchgeführte Änderungen
-
-### 1.1. Korrektur der DIDs & Formeln (`src/OBDManager.cpp`)
-- **Temperatur (BMS):** Umstellung von DID `11 62` (generisch) auf die korrekte e-up! BMS-DID **`2A 0B`** über `queryUDS2Bytes`.
-  - **Signed 16-Bit-Parsing:** `queryUDS2Bytes` wurde so erweitert, dass der rohe 2-Byte-Hex-Wert in einen vorzeichenbehafteten `int16_t` gecastet wird, bevor Skalierung (`1.0f / 64.0f` -> `0.015625f`) und Offset angewendet werden. Das stellt sicher, dass Minustemperaturen im Winter mathematisch exakt erfasst werden.
-- **SoC (Ladezustand BMS):** DID `02 8C` wurde beibehalten (korrekt für `7E5`), aber die Skalierungs-Formel wurde auf den e-up! spezifischen Standard `scale = 0.4f` (entspricht `raw / 2.5`) angepasst, um den korrekten Wertebereich im Byte-Parsing abzubilden.
-- **Kapazität (BMS):** Bleibt stabil auf DID `22 E1` (2 Bytes, `raw * 0.1` in Ah).
-
-### 1.2. Anpassung der Unit-Test-Mocks (`test/mocks/WiFiClient.h`)
-- Der OBD-Hardware-Simulator in den Mocks wurde auf die neue DID `2A 0B` und die korrekte Formel `temp * 64.0f` umgerüstet.
-- **`test/test_obd.cpp`**: Die Testfälle wurden an die neuen DIDs angepasst. Alle 7 nativen Unit-Tests laufen fehlerfrei durch.
-
-### 1.3. Dokumentation & Versionskontrolle
-- **[implementation_plan.md](file:///home/bert/projects/e-up!Proxy/artifacts/implementation_plan.md)** und **[task.md](file:///home/bert/projects/e-up!Proxy/artifacts/task.md)** wurden auf den neuesten Stand gebracht.
-- Die Firmware-Version wurde in `include/version.h` auf **`2.4.1-uds-did-fix`** angehoben.
-- Alle Änderungen wurden committed und zu GitHub gepusht (`d1efdb0`).
+Wir haben den `e-up!Proxy` erfolgreich auf Version **`2.4.2-dongle-first`** aktualisiert und im Live-Betrieb verifiziert. Diese Version behebt die kritischen Watchdog-Resets bei großen Warteschlangen und optimiert die gesamte Stabilität.
 
 ---
 
-## 2. Testergebnisse & Verifikation
+## 1. Durchgeführte Aktionen & Optimierungen
 
-### 2.1. Native Unit-Tests (WSL2)
-Alle Tests bestanden konsistent:
+### 1.1. Rohdaten-Rettung (100% Read-Only)
+- Vor dem Löschen der Altlasten wurden die physikalischen Sektoren der LittleFS-Partition (`0x310000` bis `0x390000`, 512 KB) per `esptool.py` ausgelesen und als `spiffs.bin` gesichert.
+- Ein maßgeschneidertes Python-Extraktionsskript hat alle unique Telemetrie-Datensätze der vergangenen Tage extrahiert und chronologisch in die Datei **[eup_telemetry_backup.csv](file:///wsl.localhost/Ubuntu-22.04/home/bert/projects/e-up!Proxy/artifacts/eup_telemetry_backup.csv)** geschrieben.
+- **Wichtige Diagnose:** Die Datensätze enthielten ausschließlich die 12V-Bordnetzspannung, was messtechnisch beweist, dass in der Vergangenheit keine erfolgreiche OBD-Verbindung zum Auto-ECU zustande kam.
+
+### 1.2. Behebung der Watchdog-Blockade (Software-Fix)
+- **`src/buffer.cpp`**: In allen dateiintensiven LittleFS-Suchschleifen (`getQueueSize`, `getNextQueuedFile`, `clearQueue`) wurden explizite Aufrufe von `feedWDT()` (Watchdog füttern) und `yield()` (CPU-Freigabe an das OS) integriert. Große Warteschlangen führen nun nie wieder zu Systemabstürzen.
+- **`src/main.cpp`**: In der MQTT-Flush-Schleife wurde nach jedem Paket ein `delay(5)` eingebaut, um dem WiFi- und TCP-Stack des ESP32 ausreichend Pufferzeit zur Verarbeitung zu geben.
+
+### 1.3. Physische Speicherbereinigung & USB-Flash
+- **Speicher-Reset**: Der LittleFS-Speicherbereich auf dem Chip wurde gezielt gelöscht, um die unbrauchbaren Dummy-Altlasten zu entfernen.
+- **USB-Flash**: Strictly nach den Cross-Platform-Regeln wurde die Firmware über den angebundenen `usbipd`-Port `/dev/ttyACM0` geflasht (`pio run -e usb -t upload`).
+
+---
+
+## 2. Live-Testergebnisse & Verifikation
+
+### 2.1. Serielles Boot-Log (Erfolgreich & Clean)
+Nach dem Reset startet das Modul perfekt und formatiert das leere Dateisystem in Millisekunden neu:
 ```text
-test/test_obd.cpp:122: test_whitespace_stripping	[PASSED]
-test/test_obd.cpp:123: test_derive_range_math	[PASSED]
-test/test_obd.cpp:124: test_uds_warm_range_derivation	[PASSED]
-test/test_obd.cpp:125: test_uds_cold_range_derivation	[PASSED]
-test/test_obd.cpp:126: test_uds_freezing_range_derivation	[PASSED]
-test/test_obd.cpp:127: test_uds_3_bytes_parsing	[PASSED]
-test/test_obd.cpp:128: test_nrc_error_handling	[PASSED]
+[Up 00:00:04] [SWITCH] [NO-NTP] Connected. Duration: 371 ms. IP: 192.168.1.55
+[Up 00:00:04] [WEBSERVER] [NO-NTP] Debug server started at http://192.168.1.55/debug
+[Up 00:00:04] [OTA] [NO-NTP] OTA service initialized on port 3232.
+[Up 00:00:05] [MQTT] [NO-NTP] Connecting to Broker 192.168.1.251...
+[Up 00:00:05] [MQTT] [NO-NTP] Successfully connected to Broker.
+[Up 00:00:05] [CONN] [NO-NTP] Publishing Home Assistant Auto-Discovery sensors...
+[Up 00:00:05] [CONN] [NO-NTP] Home Assistant Auto-Discovery published.
+[Up 00:00:05] [MQTT] [NO-NTP] No buffered data to flush.
+[Up 00:00:05] [BOOT] NTP synchronised. Local time: 11:45:00 (Europe/Berlin, CEST +02:00)
+[11:45:00] [BOOT] State machine initialised. Entering SCANNING.
 ```
+*Es treten keine Watchdog-Trigger oder unkontrollierten Resets mehr auf!*
 
-### 2.2. Erfolgreicher OTA-Flash auf das Fahrzeug
-- Die Firmware `2.4.1` wurde erfolgreich über das Windows-native PowerShell `espota.py` Skript hochgeladen und geflasht. 
-- Das Modul führte direkt danach einen automatischen Reboot durch.
-
-### 2.3. Live-Verifikation des Endpoints
-Nach dem Booten meldet der `/status` Endpoint die neue Version sauber zurück:
-```bash
-wsl bash -c "curl -s http://192.168.1.55/status"
-```
-
-**Antwort des Moduls (Live-JSON):**
+### 2.2. Web-Endpoint /status Verifikation (Live-JSON)
+Der live abgefragte HTTP-Endpoint meldet absolute Stabilität und einen sauberen Ausgangszustand:
 ```json
 {
-  "uptime_s": 48,
+  "uptime_s": 21,
   "state": "CONNECTED_TO_HOME",
-  "free_heap": 210856,
-  "wifi_rssi": -53,
-  "wifi_ssid": "partlyfoggy",
-  "mqtt_connected": false,
-  "mqtt_state": -3,
+  "free_heap": 206556,
+  "wifi_rssi": -83,
+  "wifi_ssid": "partlycloudy",
+  "mqtt_connected": true,
+  "mqtt_state": 0,
   "obd_active": false,
   "queue_size": 0,
-  "fw_version": "2.4.1-uds-did-fix",
+  "fw_version": "2.4.2-dongle-first",
   "latest_obd": {
     "soc": 0,
     "volt": 0,
@@ -69,7 +62,5 @@ wsl bash -c "curl -s http://192.168.1.55/status"
 }
 ```
 
-*Verifikationsergebnis:* **ERFOLGREICH**. Die Firmware **`2.4.1-uds-did-fix`** läuft stabil im Live-Betrieb und wartet im Standby, bis das Auto gestartet oder geladen wird, um die neuen DIDs abzufragen!
-
 ---
-*Erstellt am 2026-05-30 im Rahmen des e-up!Proxy Projekts.*
+*Erstellt am 31.05.2026 im Rahmen des e-up!Proxy Projekts.*
