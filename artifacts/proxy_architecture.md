@@ -16,12 +16,12 @@ graph TD
     classDef mainStyle fill:#1e1e2f,stroke:#7c4dff,stroke-width:2px,color:#fff;
     classDef branchStyle fill:#2e2e3f,stroke:#03a9f4,stroke-width:1px,color:#fff;
     
-    Boot([Start / Reboot]) --> Scan["WLAN-Netzwerke scannen"]:::mainStyle
+    Boot([Start / Reboot]) --> Scan["WLAN-Netzwerke scannen<br/><b>(LED: Blinkt schnell, 100ms)</b>"]:::mainStyle
     
     Scan --> Decision{"Welches WLAN ist sichtbar?"}:::branchStyle
     
-    Decision -- "Dongle AP (Auto ist an)" --> ConnectWican["Mit WiCAN-Dongle verbinden"]:::mainStyle
-    Decision -- "Heim-WLAN (Zuhause)" --> ConnectHome["Mit Heim-WLAN verbinden"]:::mainStyle
+    Decision -- "Dongle AP (Auto ist an)" --> ConnectWican["Mit WiCAN-Dongle verbinden<br/><b>(LED: Doppel-Blinken alle 2s)</b>"]:::mainStyle
+    Decision -- "Heim-WLAN (Zuhause)" --> ConnectHome["Mit Heim-WLAN verbinden<br/><b>(LED: Dauerhaft AN)</b>"]:::mainStyle
     Decision -- "Keines von beiden" --> Pause["30s warten"] --> Scan
     
     %% Dongle Branch
