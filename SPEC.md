@@ -1,4 +1,6 @@
 # SPEC.md — e-up!Proxy Product Specification
+> **Target Firmware Version:** `2.4.2-dongle-first`  
+> Last updated: 2026-05-31
 
 This file describes **what** the system does. For agent behaviour, build tooling, and guardrails, see `MISSIONPROMPT.md`.
 
@@ -32,7 +34,7 @@ The proxy must implement a strict State Machine to handle network connectivity. 
 - LED Pattern: Fast blinking (100ms ON / 100ms OFF).
 
 **State: CONNECTED_TO_WICAN**
-- Logic: Fetch OBD2 metrics from the Dongle every 60 seconds. Store/Buffer the fetched data locally in a FIFO queue.
+- Logic: Fetch OBD2 metrics from the Dongle every 150 seconds. Store/Buffer the fetched data locally in a FIFO queue.
 - LED Pattern: Distinct double-blink (2 quick blinks every 2 seconds).
 
 **State: CONNECTED_TO_HOME**
@@ -41,6 +43,8 @@ The proxy must implement a strict State Machine to handle network connectivity. 
 
 ### State Transition Rules
 
+- **Dongle First exklusiv**: Der Dongle hat absolute Priorität. Befindet sich der Proxy im Zustand `CONNECTED_TO_WICAN`, wird **kein** Hintergrund-WLAN-Scan durchgeführt, um die Verbindung zum Fahrzeug nicht zu unterbrechen ("Dongle first").
+- Erst bei komplettem Verbindungsverlust (Signalverlust `WL_CONNECTED` oder OBD TCP Timeout) wechselt der Proxy zurück in `STATE_SCANNING` und sucht das Heimnetzwerk und den Dongle-AP wieder gemeinsam.
 - Wican SSID always takes priority over Home Wi-Fi when both are visible.
 - On abrupt loss of Wican Wi-Fi: transition immediately to SCANNING without crashing.
 - On abrupt loss of Home Wi-Fi: transition immediately to SCANNING; buffered data is retained.
@@ -213,15 +217,15 @@ A UDS Extended Diagnostic Session (`10 03`) is opened once per connection on ECU
 | BMS (Battery Management) | `7E5` | SoC, temperature, battery capacity |
 | Dashboard / Gateway | `7E0` | Odometer, service intervals, tyre pressure |
 
-### Read Group A — Cyclic (every 60 s, during driving and charging)
+### Read Group A — Cyclic (every 150 s, during driving and charging)
 
-| MQTT field | Method | ECU | DID | Raw formula | Unit |
+| MQTT field | Method | ECU | DID | Raw formula / Type | Unit |
 |---|---|---|---|---|---|
-| `soc` | `querySoC()` | `7E5` | `02 8C` | `raw × 0.4` | `%` |
-| `temp` | `queryTemp()` | `7E5` | `11 62` | `raw − 40` | `°C` |
-| `bat_cap` | `queryBatteryCapacity()` | `7E5` | `22 E1` | `raw × 0.1` | `Ah` |
+| `soc` | `querySoC()` | `7E5` | `02 8C` | `raw × 0.4` (1 byte, `uint8_t`) | `%` |
+| `temp` | `queryTemp()` | `7E5` | `2A 0B` | `raw × 0.015625` (2 bytes, `int16_t` signed) | `°C` |
+| `bat_cap` | `queryBatteryCapacity()` | `7E5` | `22 E1` | `raw × 0.1` (2 bytes, `int16_t`) | `Ah` |
 | `volt` | `queryVoltage()` | — | `AT RV` | direct float | `V` |
-| `tp_alarm` | `queryTirePressureAlarm()` | `7E0` | `02 1A` | `raw` (0=OK) | — |
+| `tp_alarm` | `queryTirePressureAlarm()` | `7E0` | `02 1A` | `raw` (1 byte, 0=OK) | — |
 
 > `power` and `range` are not directly queried via OBD2 — derivation method TBD.
 
@@ -252,7 +256,7 @@ Group B is also read **once immediately** after Wican connection is established 
 
 Each completed read cycle produces a single `[DATA]` log line — concise, not topic-style:
 
-**Group A (cyclic, every 60 s):**
+**Group A (cyclic, every 150 s):**
 ```
 [17:43:00] [DATA] SoC=82.5% Temp=18°C Cap=61.5Ah Volt=12.4V TpAlarm=0
 ```
@@ -423,4 +427,5 @@ To create the `e-up!Proxy` user with the required write permissions in Home Assi
 | 2026-05-30 | SPEC-01, SPEC-02, SPEC-04 | Dynamic Gateway IP resolution, Uptime-Timestamp prefix, and board voltage (AT RV) fallback |
 | 2026-05-30 | SPEC-03 | Documented NAN/null placeholders for offline CAN sensors |
 | 2026-05-30 | SPEC-02 | Added specifications for /status, /obd, and /mqtt WebServer endpoints |
+| 2026-05-31 | SPEC-01, SPEC-04, SPEC-06 | Updated Fast poll interval to 150s, integrated e-up!-specific BMS DID `2A 0B` for temperature with signed int16 parsing, added "Dongle First" exklusiv state rule, and target firmware version `2.4.2-dongle-first` metadata |
 
