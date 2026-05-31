@@ -2,11 +2,50 @@
 > **Firmware Version Alignment:** `2.4.2-dongle-first`  
 > **Last updated:** 2026-05-31
 
-This document provides a highly detailed, graphical breakdown of the entire functional loop, states, timings, and dynamic sequences of the `e-up!Proxy`.
+This document provides a graphical breakdown of the entire functional loop, states, timings, and dynamic sequences of the `e-up!Proxy`.
 
 ---
 
-## 1. System States & Control Flow Diagram
+## 0. High-Level Funktionsübersicht (Vereinfacht)
+
+Dieses vereinfachte Flussdiagramm zeigt ausschließlich die drei Hauptfunktionen des Proxys: Netzwerksuche, automatischer Verbindungswechsel und Datenübertragung (Flush) an Home Assistant.
+
+```mermaid
+graph TD
+    %% Styling
+    classDef mainStyle fill:#1e1e2f,stroke:#7c4dff,stroke-width:2px,color:#fff;
+    classDef branchStyle fill:#2e2e3f,stroke:#03a9f4,stroke-width:1px,color:#fff;
+    
+    Boot([Start / Reboot]) --> Scan["WLAN-Netzwerke scannen"]:::mainStyle
+    
+    Scan --> Decision{"Welches WLAN ist sichtbar?"}:::branchStyle
+    
+    Decision -- "Dongle AP (Auto ist an)" --> ConnectWican["Mit WiCAN-Dongle verbinden"]:::mainStyle
+    Decision -- "Heim-WLAN (Zuhause)" --> ConnectHome["Mit Heim-WLAN verbinden"]:::mainStyle
+    Decision -- "Keines von beiden" --> Pause["30s warten"] --> Scan
+    
+    %% Dongle Branch
+    subgraph DONGLE_OPERATIONS ["Auto-Modus (Fahrt / Laden)"]
+        ConnectWican --> ReadData["OBD-Fahrdaten auslesen (SoC, Temp, ...)"]
+        ReadData --> BufferData["Daten im Flash-Speicher puffern"]
+        BufferData --> WicanLost{"Dongle-Verbindung getrennt?"}
+        WicanLost -- Nein (Fahrt läuft) --> ReadData
+    end
+    WicanLost -- Ja (Zündung aus) --> Scan
+    
+    %% Home Branch
+    subgraph HOME_OPERATIONS ["Home-Modus (Datenübertragung)"]
+        ConnectHome --> FlushQueue["Gepufferte Fahrdaten per MQTT senden"]
+        FlushQueue --> ClearQueue["Übertragene Dateien im Flash löschen"]
+        ClearQueue --> HomeTimeout{"5 Minuten abgelaufen?"}
+        HomeTimeout -- Nein --> HomeTimeout
+    end
+    HomeTimeout -- Ja --> Scan
+```
+
+---
+
+## 1. System States & Control Flow Diagram (Detailliert)
 
 The following flowchart details the non-blocking state machine, network scanning decision tree, watchdog feeding loops, and the new **"Dongle First" exklusiv** architecture.
 
