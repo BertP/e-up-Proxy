@@ -45,3 +45,14 @@ Wenn ein Feature oder Bugfix geplant wird, prüfen wir vorab:
 ### 2.2. Versionierung als Kontrollwerkzeug
 Jede funktionale oder strukturelle Änderung am Code führt zwingend zu einer Erhöhung der Minor- oder Patch-Version in `include/version.h` (z. B. von `2.3.1` auf `2.3.2`).
 *   Dies zwingt den ESP32 beim ersten Start nach dem Flash dazu, den Speicher sauber zu reorganisieren und alte Logdateien zu purgen, wodurch wir immer in einer definierten, sauberen Umgebung testen.
+
+---
+
+## 3. Regeln der Zusammenarbeit (Cooperation Rules)
+
+### 3.1. Umgang mit SPEC-Änderungen und Erweiterungen
+*   **Der Standard**: Wenn der Benutzer eine Anweisung erteilt, die die Systemspezifikation (`SPEC.md`) oder die Projektziele erweitert oder ändert, muss diese Änderung **zuerst im aktuellen Kontext kommentiert** (schriftlich bestätigt, analysiert und erläutert) werden, **bevor** mit der eigentlichen Arbeit oder weiterem Research begonnen wird.
+*   **Regel**:
+    1.  Die vorgeschlagene Änderung muss bezüglich ihrer Auswirkungen auf die State-Machine und die bestehenden Säulen des Engineering-Standards analysiert und verifiziert werden.
+    2.  Rückfragen an den Benutzer zur Präzisierung und Klärung von Randfällen sind in dieser Phase explizit erwünscht und gefordert, um Missverständnisse und Trial-and-Error-Entwicklungen konsequent auszuschließen.
+
